@@ -32,6 +32,32 @@ Whole suite: 210 passed, 2 skipped, 8 slow deselected (2 min 26 s).
 The soft PHY with its UTMI control plane is ≈ 520 LUTs / 290 FFs (budget ≤ 700 / ≤ 600, spec §8);
 LUNA's device core, host-lite and the console are test payload. No LUTAR-1, no critical warnings.
 
-## Hardware
+## Hardware: rpi5-netv2 (NeTV2 XC7A100T), 2026-09-07 05:03–05:04
 
-(appended below once the rpi5-netv2 slot is available)
+Logs `logs/2026-09-07-devicetest-internal-rpi5.log` and `logs/2026-09-07-devicetest-async-fast-rpi5.log`
+(30 report lines each, one per second, real LUNA timings: 2 ms chirp, 125 µs SOFs):
+
+| Mode | Steady-state loops (first → last line) | ok replies | bad / timeouts / naks / restarts | SOFs/s | chirps | hs | device CDR slips/s |
+|---|---|---|---|---|---|---|---|
+| internal | 1 616 487 → 9 433 424 (269 550 /s) | 28.3 M | 0 / 0 / 0 / 0 on every line | 8000 | 1 | 1 on every line | 0 |
+| async-fast (host at +3788 ppm, both directions) | 950 594 → 7 847 594 (237 828 /s) | 23.5 M | 0 / 0 / 0 / 0 on every line | 8000 | 1 | 1 on every line | 395 k down, 80 k up |
+
+```
+D 008FF150 01AFD3F5 00000000 00000000 00000000 00000000 000445A8 0001 1 00000000 00000001   internal, last line
+D 0077BEAA 01673C04 00000000 00000000 00000000 00000000 00040728 0001 1 00282674 00C71D69   async-fast, last line
+```
+
+- One device chirp, then high speed for the whole capture; host-lite never restarted, so the
+  device kept address 5 throughout (a re-chirp would have reset it and forced a restart).
+- Each steady-state loop is a complete GET_DESCRIPTOR control transfer (SETUP+DATA0/ACK,
+  IN/DATA1(18 bytes)/ACK, OUT+ZLP/ACK): ≈ 9.4 M control transfers with 28 M byte-exact replies
+  and no error, at ≈ 270 k transfers/s; SOFs at exactly 8000/s.
+- In the offset mode the device CDR slips 395 k/s down (+3788 ppm × 480 Mbit/s × the
+  host-packet duty cycle ≈ 22 %) plus 80 k/s of acquisition steps at packet starts (short
+  tokens, ~7 packets per loop), and the host PHY receives the device's replies offset the other
+  way through the second resampler; still zero faults.
+- What this proves on silicon: LUNA's unmodified high-speed device stack runs on the soft PHY
+  (reset/chirp handshake, tokens, CRC5/CRC16, data toggles, address filtering, control transfers)
+  at real clock rates, with a genuine 7.6× out-of-spec frequency offset in both directions.
+  What it does not: the SelectIO front-end (needs a physical channel) and full-speed line
+  states / a real host (needs set-up 2 or 3 and a level-based line state).
