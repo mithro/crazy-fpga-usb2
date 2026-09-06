@@ -38,6 +38,18 @@ offset). Measured on rpi5-netv2 on 2026-09-07: 8 M packets per mode, zero
 errors, slip rates within 2 % of prediction. Results:
 `docs/results/2026-09-07-p4-link-hardware.md`.
 
+## 0b. NeTV2 internal device test (LUNA device + host-lite, no cable)
+
+`uv run usb2soft build device-test --variant a7-100 --mode internal|async-fast|async-slow`
+puts a LUNA `USBDevice` on one soft PHY and the script-driven `HostLite` on a second soft PHY,
+joined by the same internal wires as set-up 0. The device PHY's `LineStateSynthesiser` plays the
+host half of reset-and-chirp, LUNA walks to high speed, and host-lite enumerates it
+(GET_DESCRIPTOR at address 0, SET_ADDRESS 5, then GET_DESCRIPTOR at 5 in a loop) with SOFs every
+125 µs. UART line: `D <loops> <ok> <bad> <timeouts> <naks> <restarts> <sofs> <chirps> <hs> <slip_up> <slip_dn>`;
+LEDs: locked, high speed, error. In the async modes the host PHY runs entirely from the offset
+PLL, so both directions carry a real frequency offset. Results:
+`docs/results/2026-09-07-p5-luna-device.md`.
+
 ## 1. NeTV2 ↔ NeTV2 over HDMI
 
 The NeTV2 has two HDMI inputs and two HDMI outputs on ordinary 3.3 V HR banks

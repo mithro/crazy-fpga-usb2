@@ -95,3 +95,9 @@ uv run --no-project python host/discovery_report.py < <log>      # cabling table
   announce the load to the sessions "litevideo HDMI upgrade" and "netv2 firmware upgrade and hdcp work"
   (ListAgents/SendMessage); they announce theirs too. rpi3-netv2 may hold an armed HDCP test bitstream: ask first.
 - Measured 2026-09-06: no HDMI loopback cable on rpi5-netv2 (`docs/results/2026-09-06-p1-hdmi-discovery.md`).
+- rpi5-netv2 loads are coordinated through `/home/tim/netv2-rpi5-coord/LITEVIDEO-LOAD.md`: append your own
+  row (`printf >>`), never load while another row is "in progress", and change *only your own row*, anchoring
+  the edit to its timestamp (a broad `sed` once rewrote two other sessions' rows). Loader guard refusals are
+  real: check the file and ask the other session before `--force`.
+- Reset ordering: all fabric domains leave reset together from the last LOCKED in the PLL→MMCM→PLL2 chain
+  (`docs/clocking.md`); a domain released late loses bytes in `AsyncFIFOBuffered`.
