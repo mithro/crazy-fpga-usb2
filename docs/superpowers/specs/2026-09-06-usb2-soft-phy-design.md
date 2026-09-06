@@ -1,8 +1,7 @@
 # USB 2.0 High-Speed soft PHY on Artix-7 SelectIO — design
 
 Date: 2026-09-06
-Status: revision 2 after subagent review (EOP pattern, SYNC threshold, LUNA
-reset/chirp path, ISERDES clocking rule, -1 speed grade, common mode)
+Status: revision 4, approved after three subagent review rounds (2026-09-06)
 Repository: `mithro/crazy-fpga-usb2` (private)
 
 ## 1. Goal
@@ -267,10 +266,15 @@ reset. The PHY therefore produces a UTMI-correct `line_state` in every mode:
   hardware PHY.
 - **HDMI platform** (set-up 1, no FS levels possible): the platform's
   `LineStateSynthesiser` plays the host's half of reset-and-chirp towards
-  LUNA: SE0 for ≥10 ms after power-up (LUNA needs >5 µs to call it a reset),
-  then, **every time LUNA's device chirp ends** (`op_mode == CHIRP` and
-  `tx_valid` falling), the three host K/J pairs of ≥2.5 µs each, after which
-  HS-mode squelch-derived `line_state` applies. Re-arming on the device chirp
+  LUNA: SE0 from power-up until LUNA's device chirp ends (LUNA needs >5 µs of
+  SE0 to start HS detection and the chirp itself lasts 2 ms), then, **every
+  time the device chirp ends** (`op_mode == CHIRP` and `tx_valid` falling)
+  and within 2.5 ms of it (LUNA's `AWAIT_HOST_K` timeout), the three host K/J
+  pairs with each level held ≈3–50 µs (strictly longer than LUNA's 150-cycle
+  minimum, all six levels done well inside the 2.5 ms window). Outside the
+  synthesiser's SE0 and K/J windows `line_state` is squelch-derived
+  regardless of `xcvr_select`, so the SE0-during-idle path that triggers a
+  re-chirp works while LUNA is temporarily in FS. Re-arming on the device chirp
   is essential, not a nicety: after 3 ms of squelch LUNA drops to FS, sees SE0
   again, re-enters HS detection and chirps once more; a power-up-only replay
   would leave the link dead after any idle gap or peer reset. The far-end
@@ -313,9 +317,9 @@ does not):
   VCO 600–1200 MHz).
 - All MMCM outputs have `USE_FINE_PS=TRUE` so P6 can slew the entire clock
   tree together (see 4.8). Resets are `~locked` through `ResetSynchronizer`.
-- Domains: `usb` (60), `rx_cdr` (120), `rx_io` (480; plus `rx_io90` in the
-  two-phase fallback), `tx_io` (240), `idelay_ref` (300), `sync` (= `usb`,
-  control/UART).
+- Domains: `usb` (60), `rx_cdr` (120), `rx_io` (480), `tx_io` (240),
+  `idelay_ref` (300), `sync` (= `usb`, control/UART); the two-phase fallback
+  adds `rx_io90` (480 @ 90°) and `rx_cdr90` (120 @ 22.5°).
 - The BUFG-only design has no clock-region coupling, so a second RX pair
   costs two more ISERDES and two IDELAYs; if it sits in another bank (RX0 is
   bank 15, RX1 bank 14) it also needs that bank's own IDELAYCTRL.
