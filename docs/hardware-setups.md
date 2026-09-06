@@ -32,8 +32,11 @@ the TX path from a second PLLE2 at 120.4545 MHz (+3788 ppm) / 119.4444 MHz
 sees exactly what a host crystal at that offset would produce. Both are well
 outside the USB 2.0 limit of ±500 ppm. The UART line
 `L <tx> <good> <bad> <err> <gaps> <slip_up> <slip_down> <phase>` gives the
-packet counters and the CDR's slip counts (one slip per 1/(4·ppm) UI in the
-direction of the offset). Results: `docs/results/2026-09-07-p4-link-hardware.md`.
+packet counters and the CDR's slip counts (one slip per UI of accumulated drift,
+i.e. ppm × bit rate × packet duty cycle per second, in the direction of the
+offset). Measured on rpi5-netv2 on 2026-09-07: 8 M packets per mode, zero
+errors, slip rates within 2 % of prediction. Results:
+`docs/results/2026-09-07-p4-link-hardware.md`.
 
 ## 1. NeTV2 ↔ NeTV2 over HDMI
 
