@@ -14,7 +14,7 @@ for `xc7a35tfgg484` / `xc7a35tcsg324` and the litex-boards platform files on
 | # | Set-up | Proves | Cannot prove | Status |
 |---|--------|--------|--------------|--------|
 | 1 | NeTV2 ↔ NeTV2 over HDMI cables (TMDS pairs) | 480 Mbit/s CDR, framing, stuffing, drift tracking with independent crystals, digital squelch, two-way packet exchange, resource use | full-speed line states, chirp, real USB electrical levels/terminations | boards exist at Welland; needs `pi` key authorisation on the four cross-connected units |
-| 2 | NeTV2 self-loopback: HDMI out → own HDMI in | everything in 1 except independent-crystal drift (same clock both ends; drift must be emulated by the P6 phase slewer) | as 1 | usable on `rpi5-netv2` (a loopback bitstream already exists there, indicating the cable) — verify with the discovery applet |
+| 2 | NeTV2 self-loopback: HDMI out → own HDMI in | everything in 1 except independent-crystal drift (same clock both ends; drift must be emulated by the P6 phase slewer) | as 1 | **not present on `rpi5-netv2`** (measured 2026-09-06 with the discovery applet: no lane hears a beacon); needs a cable to be fitted |
 | 3 | NeTV2 direct USB via PCIe "hax"/SMBus pair + bunnie's `netv2mvp-usb3-v1` breakout | real USB connector to a real host: FS line states, reset, chirp, HS data (with the adaptor network below) | nothing else once the network exists | needs the breakout and a resistor network; not installed on any Welland board today |
 | 4 | Arty A7 PMOD + USB breakout, Raspberry Pi as host | same as 3 on the Arty fleet, plus the Pi is right there as host | — | needs a PMOD USB breakout and the resistor network |
 | 5 | Future purpose-built board | everything | — | pin requirements in §6 |
@@ -58,9 +58,10 @@ user authorises the key for `pi` there.
 
 Same pins as §1 with the cable from TX0 to RX0 of the same board. On
 `rpi5-netv2` (XC7A100T, `tim@rpi5-netv2.welland.mithis.com`, UART
-`/dev/ttyAMA0`, loader `~/netv2-phase4/netv2_update.py load <bit>`) a
-`hdmi_loopback.bit` from earlier work suggests such a cable is fitted; the
-discovery applet confirms it. Because both ends share one crystal there is no
+`/dev/ttyAMA0`, loader `host/netv2_run.py --host rpi5-netv2`) the discovery
+applet measured on 2026-09-06 that **no** HDMI RX lane hears the board's own
+TX beacons (`docs/results/2026-09-06-p1-hdmi-discovery.md`), so no loopback
+cable is fitted there today. Because both ends share one crystal there is no
 natural frequency offset; drift tolerance is exercised by slewing the TX
 MMCM phase (the P6 mechanism run open-loop as a test stimulus) or by using
 separate PLLs for RX and TX with different fractional multipliers.
