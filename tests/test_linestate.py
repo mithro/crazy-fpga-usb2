@@ -50,6 +50,7 @@ def test_hs_line_state_follows_activity_and_level():
 
 class _Synth(Elaboratable):
     def __init__(self, **kw):
+        kw.setdefault("min_chirp_cycles", 5)
         self.s = LineStateSynthesiser(**kw)
 
     def elaborate(self, platform):
@@ -142,3 +143,41 @@ def test_synthesiser_chirp_during_se0_still_replays():
     assert any(r == (K, 3) for r in runs) and sum(1 for r in runs if r == (K, 3)) == 3, runs
     assert sum(1 for r in runs if r == (J, 3)) == 3, runs
     assert runs[-1][0] == SE0                        # pass-through squelch afterwards
+
+
+def test_synthesiser_ignores_short_tx_pulses_in_chirp_mode():
+    """LUNA answers packets while op_mode is still 2; only a long K burst may (re)arm the replay."""
+    dut = _Synth(se0_cycles=10, gap_cycles=2, hold_cycles=3, min_chirp_cycles=8)
+    trace = []
+
+    async def tb(ctx):
+        ctx.set(dut.s.squelch_line_state, SE0)
+        for _ in range(12):
+            await ctx.tick("usb")
+        ctx.set(dut.s.op_mode, CHIRP)
+        for n in (1, 2, 7):                      # short bursts: ACK-sized pulses
+            ctx.set(dut.s.tx_valid, 1)
+            for _ in range(n):
+                await ctx.tick("usb")
+            ctx.set(dut.s.tx_valid, 0)
+            for _ in range(4):
+                await ctx.tick("usb")
+        for _ in range(30):
+            trace.append(ctx.get(dut.s.line_state))
+            await ctx.tick("usb")
+        assert ctx.get(dut.s.chirps) == 0
+        ctx.set(dut.s.tx_valid, 1)               # a real chirp
+        for _ in range(9):
+            await ctx.tick("usb")
+        ctx.set(dut.s.tx_valid, 0)
+        for _ in range(30):
+            trace.append(ctx.get(dut.s.line_state))
+            await ctx.tick("usb")
+        assert ctx.get(dut.s.chirps) == 1
+
+    sim = Simulator(dut)
+    sim.add_clock(1 / 60e6, domain="usb")
+    sim.add_testbench(tb)
+    sim.run()
+    assert set(trace[:30]) == {SE0}
+    assert K in trace[30:] and J in trace[30:]

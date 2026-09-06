@@ -46,10 +46,15 @@ class HSLineState(Elaboratable):
 
 
 class LineStateSynthesiser(Elaboratable):
-    def __init__(self, *, se0_cycles=600, gap_cycles=60, hold_cycles=300, pairs=3, domain="usb"):
+    def __init__(self, *, se0_cycles=600, gap_cycles=60, hold_cycles=300, pairs=3,
+                 min_chirp_cycles=60_000, domain="usb"):
         """Defaults at 60 MHz: 10 µs of SE0 at power-up, 1 µs gap after the device chirp, 5 µs
-        per K/J level (LUNA needs ≥ 2.5 µs each and all pairs within 2.5 ms)."""
+        per K/J level (LUNA needs ≥ 2.5 µs each and all pairs within 2.5 ms). Only a K burst of
+        at least ``min_chirp_cycles`` (1 ms; the device chirp is 2 ms) counts as a chirp: LUNA
+        still answers packets while ``op_mode`` is 2 (from START_HS_DETECTION to IS_HIGH_SPEED),
+        and those short ``tx_valid`` pulses must not restart the replay."""
         self.se0_cycles, self.gap_cycles, self.hold_cycles, self.pairs = se0_cycles, gap_cycles, hold_cycles, pairs
+        self.min_chirp_cycles = min_chirp_cycles
         self.domain = domain
         self.op_mode = Signal(2)
         self.tx_valid = Signal()
@@ -64,7 +69,13 @@ class LineStateSynthesiser(Elaboratable):
         chirping = (self.op_mode == OP_MODE_CHIRP) & self.tx_valid
         prev = Signal()
         m.d[self.domain] += prev.eq(chirping)
-        chirp_end = prev & ~chirping
+        # Length filter: a genuine device chirp is a long K burst; short pulses are packets.
+        length = Signal(range(self.min_chirp_cycles + 1))
+        with m.If(~chirping):
+            m.d[self.domain] += length.eq(0)
+        with m.Elif(length != self.min_chirp_cycles):
+            m.d[self.domain] += length.eq(length + 1)
+        chirp_end = prev & ~chirping & (length == self.min_chirp_cycles)
         with m.If(chirp_end):
             m.d[self.domain] += self.chirps.eq(self.chirps + 1)
 

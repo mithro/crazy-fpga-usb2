@@ -19,7 +19,7 @@ SCALED = {
     "_CYCLES_200_MICROSECONDS": 600,
     "_CYCLES_3_MILLISECONDS": 3000,
 }
-SYNTH_SCALED = dict(se0_cycles=60, gap_cycles=6, hold_cycles=20)
+SYNTH_SCALED = dict(se0_cycles=60, gap_cycles=6, hold_cycles=20, min_chirp_cycles=60)
 
 
 def scale_sequencer(monkeypatch, values=SCALED):

@@ -10,7 +10,7 @@ from tests.test_tx_path import utmi_source, segments
 
 class _Harness(Elaboratable):
     def __init__(self, synth=False):
-        s = LineStateSynthesiser(se0_cycles=20, gap_cycles=4, hold_cycles=6) if synth else None
+        s = LineStateSynthesiser(se0_cycles=20, gap_cycles=4, hold_cycles=6, min_chirp_cycles=5) if synth else None
         self.phy = SoftUTMIPHY(usb_domain="usb", cdr_domain="rx_cdr", tx_domain="tx_cdr", synthesiser=s)
 
     def elaborate(self, platform):
