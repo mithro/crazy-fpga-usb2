@@ -79,3 +79,19 @@ Plans live in `docs/superpowers/plans/`.
   timing summary into `docs/results/`.
 - Keep `docs/hardware-setups.md` current whenever a new way to validate on
   hardware is found or used.
+
+## Daily commands
+
+```
+uv run pytest -q                                   # all simulation/unit tests (must be green before any commit)
+uv run usb2soft list                               # applets
+uv run usb2soft build <applet> --variant a7-35|a7-100 [--no-build]   # Vivado build -> build/<applet>-netv2-<variant>/vivado/
+uv run python host/netv2_run.py --host rpi5-netv2|rpi3-netv2 --bit <top.bit> --seconds 6 --log docs/results/logs/<date>-<what>-<host>.log
+uv run --no-project python host/discovery_report.py < <log>      # cabling table from hdmi-discovery output
+```
+
+- After any change to platform pins or clocking, build and run `hello` on hardware before anything else.
+- Other Claude sessions share rpi5-netv2 and rpi3-netv2. Before a load: check `w`/recent files, and
+  announce the load to the sessions "litevideo HDMI upgrade" and "netv2 firmware upgrade and hdcp work"
+  (ListAgents/SendMessage); they announce theirs too. rpi3-netv2 may hold an armed HDCP test bitstream: ask first.
+- Measured 2026-09-06: no HDMI loopback cable on rpi5-netv2 (`docs/results/2026-09-06-p1-hdmi-discovery.md`).
