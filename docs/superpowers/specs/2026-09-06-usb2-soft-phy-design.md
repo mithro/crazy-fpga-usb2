@@ -1,7 +1,7 @@
 # USB 2.0 High-Speed soft PHY on Artix-7 SelectIO — design
 
 Date: 2026-09-06
-Status: revision 4, approved after three subagent review rounds (2026-09-06)
+Status: revision 5 (2026-09-07): §4.2 vote dead zone and §4.3 120 MHz decoder + event FIFO, as built and measured in P2
 Repository: `mithro/crazy-fpga-usb2` (private)
 
 ## 1. Goal
@@ -105,8 +105,9 @@ recorded as requirements, not designed here.
 
 ```
                  pins                 rx_io / rx_div domains        rx_cdr 120 MHz            usb 60 MHz
- D+/D- ──IBUFDS_DIFF_OUT──► ISERDESE2 ×2 ──► 16 samples/cycle ──► OversamplingCDR ──► 2:1 gear ──► RxDecoder ──► UTMI rx_*
-                                        (4 samples per UI)         (3..5 bits/cycle)            (NRZI, unstuff, SYNC/EOP, bytes)
+ D+/D- ──IBUFDS_DIFF_OUT──► ISERDESE2 ×2 ──► 16 samples/cycle ──► OversamplingCDR ──► PacketDecoder ──► event FIFO ──► UTMI rx_*
+                                        (4 samples per UI)         (3..5 bits/cycle)   (120 MHz: NRZI, SYNC,   (rx_cdr → usb)
+                                                                                        unstuff, EOP, bytes)
 
  UTMI tx_* ──► TxEncoder ──► elastic 8-bit gearbox ──► OSERDESE2 8:1 DDR (240 MHz) ──► OBUFTDS ──► D+/D-
            (SYNC, stuff, NRZI, EOP)     usb 60 MHz                  tx_io 240 MHz
@@ -163,10 +164,13 @@ multiple of `S`). State: pick phase `φ ∈ [0, S)`; the picks in a cycle are at
 1. Edge vector `e[i] = s[i] ^ s[i-1]` including the previous cycle's last
    sample.
 2. Each edge votes on where the ideal pick is (edge + S/2 samples later). The
-   vote is the difference from the current pick grid modulo `S`, mapped to
-   {-1, 0, +1}; for S=4 the equidistant case (difference 2, pick sitting on
-   the sample right after the transition) votes +1 rather than abstaining, so
-   the worst sampling point is never a stable equilibrium.
+   vote is the difference from the current pick grid modulo `S`. For S=3:
+   +1 → step later, 2 → step earlier. For S=4 (revision 5, measured in P2):
+   differences 0 and 1 are a dead zone, 2 → step later, 3 → step earlier.
+   With jitter the loop then settles with the mean edge *on* a sample
+   instant, centring the pick 0.5 UI after it with symmetric margins; voting
+   on difference 1 as well centred the mean edge mid-slot and cost a third of
+   the jitter margin (knee 0.06 instead of 0.12 UI rms).
 3. Votes feed a saturating up/down loop filter. In *acquire* mode (no packet
    active) the threshold is 1 so the SYNC's edge-every-bit pattern aligns the
    phase within a few bits. In *track* mode the threshold is higher (2–4,
@@ -189,11 +193,16 @@ phase re-align on every transition) becomes sampler + `OversamplingCDR`
 (phase pointer with a loop filter, because at 480 Mbit/s a single glitch must
 not re-align the phase).
 
-### 4.3 RX decoder (`usb2soft.rx.decoder`), `usb` 60 MHz domain
+### 4.3 RX decoder (`usb2soft.rx.decoder`), `rx_cdr` 120 MHz domain
 
-A 2:1 gearbox (synchronous, both clocks from the same MMCM) delivers up to 10
-bits per 60 MHz cycle. Word-parallel stages, each carrying state across
-cycles:
+The decoder consumes the CDR's words directly (≤5 bits per 120 MHz cycle);
+bytes and packet events then cross into the 60 MHz `usb` domain through a
+16-entry `AsyncFIFOBuffered` (`usb2soft.rx.bridge.RxUTMIBridge`), which is
+also the elastic buffer. (Revision 5: the earlier plan of a 2:1 gearbox and a
+10-bit-wide 60 MHz decoder was dropped in P2 — prefix logic over 5 bits is
+about a quarter of the size, 120 MHz is comfortable on Artix-7 -2, and the
+async FIFO removes any assumption about the `rx_cdr`/`usb` phase.)
+Word-parallel stages, each carrying state across cycles:
 
 - **NRZI decode**: `d[i] = ~(b[i] ^ b[i-1])`, previous raw bit carried.
 - **SYNC / packet detect**: HS SYNC is 32 bits (KJKJ…KK), of which up to 20
@@ -208,12 +217,12 @@ cycles:
   `01111111` (a zero, then seven ones, no stuffing), so at the violation the
   packer must hold exactly 7 bits since the last byte boundary; anything else
   is `rx_error`. Mirrors `RxBitstuffRemover`.
-- **Byte packer**: variable-count shift-in (0–10 bits), byte-out when ≥8 are
-  held, into a small elastic FIFO (16 bytes) that drains during inter-packet
-  gaps. Needed because a faster host delivers slightly more than 8 bits per
-  local 60 MHz cycle and UTMI allows at most one byte per cycle. Mirrors
-  `RxShifter` plus the CDC FIFO, except no asynchronous crossing is needed:
-  the host's clock offset is absorbed in the CDR, not in a FIFO.
+- **Byte packer**: variable-count shift-in (0–5 bits), byte-out when 8 are
+  held; bytes and START/END/ERROR events go into the 16-entry async FIFO that
+  drains during inter-packet gaps. Needed because a faster host delivers
+  slightly more than 8 bits per local 60 MHz cycle and UTMI allows at most one
+  byte per cycle. Mirrors `RxShifter` plus the CDC FIFO; the host's clock
+  offset itself is absorbed in the CDR.
 - **UTMI outputs**: `rx_active` from SYNC until the EOP byte has drained,
   `rx_valid`/`rx_data` per byte, `rx_error` on a packet that ends unaligned.
 - **Turnaround budget**: a HS device must start its response within 192 bit
