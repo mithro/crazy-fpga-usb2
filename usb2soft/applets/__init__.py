@@ -9,7 +9,7 @@ __all__ = ["Applet", "APPLETS", "register", "load_builtin_applets"]
 APPLETS = {}
 
 # Built-in applet modules; each registers itself on import.
-_BUILTIN = ("hello", "hdmi_discovery", "link_test")
+_BUILTIN = ("hello", "hdmi_discovery", "link_test", "device_test")
 
 
 class Applet(Elaboratable):
