@@ -27,7 +27,8 @@ include = ["usb2soft*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not slow'"
+markers = ["slow: long margin sweeps, run explicitly with -m slow"]
 
 [dependency-groups]
 dev = [
