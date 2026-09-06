@@ -7,8 +7,9 @@ timers cleared while traffic flows.
 
 ``LineStateSynthesiser``: for platforms without full-speed levels (HDMI pairs, internal wires) it
 plays the *host's* half of reset-and-chirp towards LUNA: SE0 from power-up (LUNA needs > 5 µs of
-SE0 to start high-speed detection) and, every time the device chirp ends (``op_mode == 2`` with
-``tx_valid`` falling), three K/J pairs, each level held well over LUNA's 2.5 µs minimum and all
+SE0 to start high-speed detection) and, every time a device chirp ends (``op_mode == 2`` with
+``tx_valid`` held for at least ``min_chirp_cycles`` and then falling), three K/J pairs, each level
+held well over LUNA's 2.5 µs minimum and all
 done well inside its 2.5 ms window. Outside those windows the squelch-derived state passes
 through. Re-arming on every device chirp is what lets LUNA recover after a 3 ms idle gap or a
 peer reset (it drops to FS, sees SE0, and chirps again).
@@ -33,6 +34,9 @@ class HSLineState(Elaboratable):
 
     def elaborate(self, platform):
         m = Module()
+        # activity and level are registered together in the cdr domain and cross as a pair; the
+        # two bits may still skew by one usb cycle (a 1-cycle J/K glitch), which is harmless: LUNA
+        # only tests HS line_state against SE0, and K/J timing comes from the synthesiser.
         pair = Signal(2)
         m.d[self.cdr_domain] += pair.eq(Cat(self.level, self.activity))
         synced = Signal(2)

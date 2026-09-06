@@ -27,7 +27,7 @@ from ..sim.expander import SampleExpander, AsyncResampler
 
 CONSOLE_BAUD = 115200
 SYNTH_REAL = dict(se0_cycles=600, gap_cycles=60, hold_cycles=300, min_chirp_cycles=60_000)
-HOST_REAL = dict(sof_period=7500, start_delay=180_000, restart_delay=6000, reply_timeout=256)
+HOST_REAL = dict(sof_period=7500, start_delay=180_000, restart_delay=360_000, reply_timeout=256)
 
 
 class DeviceTestCore(Elaboratable):
@@ -86,6 +86,8 @@ class DeviceTestCore(Elaboratable):
             m.d.comb += [self.device.connect.eq(1),
                          self.hs.eq((self.device.speed == 0) & (self.dev_phy.op_mode == 0))]
             cdr = self.dev_phy.rx.cdr
+            # rx_cdr -> usb copies without a synchroniser: both clocks come from the same MMCM
+            # (2:1, phase aligned), so Vivado times the path (as in link_test).
             for src, cnt in ((cdr.slip_up, self.slips_up), (cdr.slip_down, self.slips_down)):
                 raw = Signal(32)
                 with m.If(src):

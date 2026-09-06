@@ -6,9 +6,12 @@ replies byte-for-byte. The default script enumerates a LUNA device (GET_DESCRIPT
 SET_ADDRESS 5, then a steady-state GET_DESCRIPTOR loop at address 5) and keeps SOFs flowing at
 transaction boundaries so the device never sees 3 ms of squelch.
 
-Robustness rules (from the P5 plan review): a power-up hold-off before the script starts; a
-restart from step 0 after ``max_faults`` consecutive timeouts/bad replies (a device re-chirp resets
-its address to 0); stray packets are ignored while no reply is awaited; NAK retries the step.
+Robustness rules (from the P5 plan and code reviews): a power-up hold-off before the script
+starts; after ``max_faults`` consecutive timeouts/bad replies the host goes *silent* for
+``restart_delay`` (longer than the device's 3 ms squelch → FS → re-chirp path, so the device
+resets to address 0) and restarts the script from step 0; stray packets are ignored while no
+reply is awaited; NAK retries the transaction. Same-transmitter gaps (token → DATA) are 16 usb
+cycles = 128 bit times (USB 2.0 §7.1.18.2 asks for ≥ 88).
 """
 from amaranth import Elaboratable, Module, Signal, Array, Const, Cat, Mux
 
@@ -67,12 +70,14 @@ def _crc5_terms():
 
 
 class HostLite(Elaboratable):
-    def __init__(self, steps, *, sof_period=7500, start_delay=180_000, restart_delay=6000,
+    def __init__(self, steps, *, sof_period=7500, start_delay=180_000, restart_delay=360_000,
                  reply_timeout=256, max_faults=4, domain="usb"):
         self.steps = list(steps)
         self.sof_period = sof_period
         self.start_delay = start_delay
-        self.restart_delay = restart_delay      # 100 us: short enough that SOFs resume in time
+        # 6 ms of silence: the device sees > 3 ms of squelch, drops to FS, re-chirps (2 ms) and
+        # is back at address 0 when the script restarts.
+        self.restart_delay = restart_delay
         self.reply_timeout = reply_timeout
         self.max_faults = max_faults
         self.domain = domain
@@ -124,6 +129,7 @@ class HostLite(Elaboratable):
 
         # --- SOF packet: A5, frame[7:0], frame[10:8] | crc5 << 3 ------------------------------
         frame = Signal(11)
+        microframe = Signal(3)
         c0, terms = _crc5_terms()
         crc = Const(c0, 5)
         for i, t in enumerate(terms):
@@ -138,8 +144,9 @@ class HostLite(Elaboratable):
 
         # --- transmit / receive bookkeeping ----------------------------------------------------
         idx = Signal(7)                  # byte index in the packet being sent / compared
-        timer = Signal(range(max(self.start_delay, self.reply_timeout, 64) + 1))
+        timer = Signal(range(max(self.start_delay, self.restart_delay, self.reply_timeout, 64) + 1))
         hold_target = Signal.like(timer, init=self.start_delay - 1)
+        gap_target = Signal(6, init=16)     # latched per step in ADVANCE (cur_gap changes with step)
         faults = Signal(range(self.max_faults + 1))
         mismatch = Signal()
         sending_sof = Signal()
@@ -149,7 +156,7 @@ class HostLite(Elaboratable):
         nak_seen = Signal()
 
         def fault(counter):
-            m.d[self.domain] += [counter.eq(counter + 1), timer.eq(0)]
+            m.d[self.domain] += [counter.eq(counter + 1), timer.eq(0), gap_target.eq(16)]
             with m.If(faults == self.max_faults - 1):
                 m.d[self.domain] += [faults.eq(0), self.restarts.eq(self.restarts + 1), step.eq(0),
                          hold_target.eq(self.restart_delay - 1)]
@@ -192,7 +199,9 @@ class HostLite(Elaboratable):
                     with m.If(idx == length - 1):
                         m.d[self.domain] += idx.eq(0)
                         with m.If(sending_sof):
-                            m.d[self.domain] += [self.sofs.eq(self.sofs + 1), frame.eq(frame + 1), timer.eq(0)]
+                            m.d[self.domain] += [self.sofs.eq(self.sofs + 1), microframe.eq(microframe + 1), timer.eq(0)]
+                            with m.If(microframe == 7):
+                                m.d[self.domain] += frame.eq(frame + 1)
                             m.next = "SOF_GAP"
                         with m.Elif(cur_expect == EXPECT_NONE):
                             m.d[self.domain] += timer.eq(0)
@@ -254,10 +263,10 @@ class HostLite(Elaboratable):
             with m.State("ADVANCE"):
                 with m.If(cur_loops):
                     m.d[self.domain] += self.loops.eq(self.loops + 1)
-                m.d[self.domain] += [step.eq(cur_next), timer.eq(0)]
+                m.d[self.domain] += [gap_target.eq(cur_gap), step.eq(cur_next), timer.eq(0)]
                 m.next = "GAP"
             with m.State("GAP"):
-                with m.If(timer >= cur_gap):
+                with m.If(timer >= gap_target):
                     m.d[self.domain] += timer.eq(0)
                     with m.If(step == n_steps):
                         m.d[self.domain] += step.eq(0)

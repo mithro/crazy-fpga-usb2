@@ -6,7 +6,7 @@ from amaranth.sim import Simulator
 from usb2soft.applets.device_test import DeviceTestCore
 from tests.luna_harness import scale_sequencer, SYNTH_SCALED
 
-HOST_SCALED = dict(sof_period=1500, start_delay=1200, restart_delay=100, reply_timeout=256)
+HOST_SCALED = dict(sof_period=1500, start_delay=1200, restart_delay=4200, reply_timeout=256)
 
 
 class _Top(Elaboratable):
@@ -68,3 +68,27 @@ def test_device_test_build_tags():
         a = DeviceTest(args)
         a._MustUse__silence = True
         assert bool(a.vivado_constraints()) == args.mode.startswith("async-")
+
+
+@pytest.mark.parametrize("role", ["device", "host"])
+def test_device_test_roles_elaborate(role):
+    from amaranth.back import rtlil
+    from amaranth import Signal
+
+    class Top(Elaboratable):
+        def __init__(self):
+            self.core = DeviceTestCore(role=role)
+
+        def elaborate(self, platform):
+            m = Module()
+            for d in ("usb", "sync", "rx_cdr", "tx_cdr"):
+                m.domains += ClockDomain(d)
+            m.submodules.core = self.core
+            probe = Signal(16)
+            m.d.comb += self.core.samples.eq(probe)
+            return m
+
+    top = Top()
+    text = rtlil.convert(top, ports=[top.core.line, top.core.oe, top.core.uart_tx])
+    assert ("hostlite" in text.lower()) == (role == "host")
+    assert ("reset_sequencer" in text) == (role == "device")
