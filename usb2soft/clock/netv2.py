@@ -104,10 +104,12 @@ class NeTV2PhyClocks(Elaboratable):
         ]
         if not self.async_tx:
             m.d.comb += self.locked.eq(pll.locked & mmcm.locked)
-        # Each domain is reset by its own generator's LOCKED pin alone (no LUT on an async reset,
-        # Vivado LUTAR-1): the MMCM is held in reset until the PLL locks, so mmcm.locked implies
-        # pll.locked, and the optional second PLL is chained off the MMCM in the same way.
-        resets = {name: ~(pll.locked if name == "idelay_ref" else mmcm.locked) for name in self.cd}
+        # The generators form a lock chain (PLL -> MMCM -> optional second PLL: each is held in
+        # reset until the previous one locks), so the last LOCKED pin implies all of them. Every
+        # fabric domain is reset from that single pin (no LUT on an async reset, Vivado LUTAR-1)
+        # and all fabric domains leave reset together, which the byte FIFOs between them assume.
+        # idelay_ref only needs the first PLL.
+        fabric_locked = mmcm.locked
         if self.async_tx:
             from .params import ClockSolution, OutputSetting
             cfg = self.ASYNC_TX[self.async_tx]
@@ -118,7 +120,8 @@ class NeTV2PhyClocks(Elaboratable):
             m.submodules.pll2 = pll2 = PLLE2(sol2, clkin=clk50_buf.i, reset=~mmcm.locked)
             m.d.comb += self.cd["tx_async"].clk.eq(pll2.clocks["tx_async"])
             m.d.comb += self.locked.eq(pll.locked & mmcm.locked & pll2.locked)
-            resets["tx_async"] = ~pll2.locked
-        for name, arst in resets.items():
+            fabric_locked = pll2.locked
+        for name in self.cd:
+            arst = ~pll.locked if name == "idelay_ref" else ~fabric_locked
             m.submodules[f"rst_{name}"] = ResetSynchronizer(arst, domain=name)
         return m
