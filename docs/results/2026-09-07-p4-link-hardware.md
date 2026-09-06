@@ -27,6 +27,22 @@ Hierarchical utilisation (`top_utilization_hierarchical_place.rpt`):
 | `core/chk` | 88 | 222 | test instrument |
 | `core/gen` | 95 | 101 | test instrument |
 
+### Rebuilt at the review-fixed head (commit after the code review)
+
+The table above is from the build that produced the first hardware run (before the P3 review
+fixes to the encoder were rebased in). After the review fixes (CDR-domain 32-bit slip counters,
+overflow field, IDELAY loader, per-generator resets) the four modes rebuild as:
+
+| Mode | WNS / WHS | LUTs / FFs (whole design) | `core/rx` | `core/tx` | Notes |
+|---|---|---|---|---|---|
+| internal | 0.356 / 0.073 ns | 1018 / 982 | 234 / 131 | 241 / 106 | encoder 185/61 after the 44-bit SYNC-preload queue |
+| hdmi (RX0) | 0.318 / 0.069 ns (WPWS 0.491 at 480 MHz) | 1065 / 984 | same | same | LD now driven; `IS_*_INVERTED` explicit |
+| async-fast | 0.353 / 0.078 ns | 1446 / 1227 | same | same | 2 PLLE2 + MMCME2 |
+| async-slow | 0.429 / 0.013 ns | 1447 / 1227 | same | same | |
+
+PHY datapath at head: **475 LUTs / 237 FFs** (budget ≤700 / ≤600). Vivado methodology check
+LUTAR-1 (LUT driving async reset) is gone in all four.
+
 ## Hardware: rpi5-netv2 (NeTV2 XC7A100T), internal loopback, phase rotation 1
 
 Log: `logs/2026-09-07-linktest-internal-rpi5.log` (12 s capture, compressed bitstream loaded in
