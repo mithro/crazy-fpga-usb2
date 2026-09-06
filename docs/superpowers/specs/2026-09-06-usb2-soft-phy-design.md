@@ -1,7 +1,7 @@
 # USB 2.0 High-Speed soft PHY on Artix-7 SelectIO — design
 
 Date: 2026-09-06
-Status: revision 5 (2026-09-07): §4.2 vote dead zone and §4.3 120 MHz decoder + event FIFO, as built and measured in P2
+Status: revision 6 (2026-09-07): P2 (§4.2 vote dead zone, §4.3 120 MHz decoder + event FIFO) and P3 (§4.4 4:1 serialiser with per-bit tristate) as built and measured
 Repository: `mithro/crazy-fpga-usb2` (private)
 
 ## 1. Goal
@@ -109,8 +109,8 @@ recorded as requirements, not designed here.
                                         (4 samples per UI)         (3..5 bits/cycle)   (120 MHz: NRZI, SYNC,   (rx_cdr → usb)
                                                                                         unstuff, EOP, bytes)
 
- UTMI tx_* ──► TxEncoder ──► elastic 8-bit gearbox ──► OSERDESE2 8:1 DDR (240 MHz) ──► OBUFTDS ──► D+/D-
-           (SYNC, stuff, NRZI, EOP)     usb 60 MHz                  tx_io 240 MHz
+ UTMI tx_* ──► byte FIFO ──► PacketEncoder (4 bits + 4 oe / 120 MHz) ──► OSERDESE2 4:1 DDR, T 4:1 (240 MHz) ──► OBUFTDS ──► D+/D-
+           usb 60 MHz              (SYNC, stuff, NRZI, EOP)                          tx_io 240 MHz
 
  D+, D- single-ended ──► LineStateMonitor (usb 60 MHz) ──► UTMI line_state; chirp/reset per UTMI op_mode/term_select
 
@@ -234,7 +234,7 @@ Word-parallel stages, each carrying state across cycles:
 
 ### 4.4 TX path (`usb2soft.tx`)
 
-- **TxEncoder** (usb domain): on `tx_valid` rising, emit the 32-bit SYNC, then
+- **TxEncoder** (`tx_cdr` 120 MHz domain, 4 bits per cycle): on the first byte, emit the 32-bit SYNC, then
   bytes LSB-first with stuffing (a zero after six ones), NRZI, then the EOP
   byte `01111111` in NRZ (a zero forcing one transition, then seven ones with
   stuffing disabled, so the violation lands byte-aligned regardless of how
@@ -244,12 +244,16 @@ Word-parallel stages, each carrying state across cycles:
   per cycle to the serialiser and asserts `tx_ready` only when it can accept
   another byte; stuffing makes some bytes cost 9 bits, which is exactly when
   UTMI expects `tx_ready` to drop.
-- **Serialiser**: OSERDESE2 `DDR`, `DATA_WIDTH=8`, `TRISTATE_WIDTH=1`,
-  `DATA_RATE_TQ="BUF"`, CLK = 240 MHz, CLKDIV = 60 MHz, into OBUFTDS.
-  Tristate is byte-granular, which is sufficient because EOP is exactly one
-  byte, but the T path has far less latency than the 8:1 data path, so the
-  fabric delays the T assertion/de-assertion by the measured data-path latency
-  (a simulation test pins the number). Idle = driver off.
+- **Serialiser** (revision 6, from P3): OSERDESE2 `DDR`, `DATA_WIDTH=4`,
+  `TRISTATE_WIDTH=4`, `DATA_RATE_TQ="DDR"`, CLK = 240 MHz, CLKDIV = 120 MHz,
+  into OBUFTDS. 4:1 is the only OSERDESE2 configuration with a per-bit
+  tristate word (8:1 forces `TRISTATE_WIDTH=1`, byte-granular, which would
+  dribble up to seven bits after the EOP), so the encoder produces 4 line bits
+  plus 4 output-enable bits per 120 MHz cycle and the driver turns off on the
+  exact bit after the EOP; T rides through the same serialiser as the data,
+  so no fabric delay matching is needed. Bytes reach the encoder from the
+  `usb` domain through a depth-4 async FIFO so `tx_ready` still tracks the
+  line rate. Idle = driver off.
 - `op_mode = 2` (no NRZI/no stuffing, used for chirp) bypasses the encoder and
   drives the level given by `tx_data[0]` while `tx_valid` (0 → K, as LUNA's
   reset sequencer expects).
