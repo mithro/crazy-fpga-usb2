@@ -158,8 +158,12 @@ def test_all_edges_word_does_not_slip(S, W):
 
 
 def test_track_threshold_validated():
-    with pytest.raises(ValueError):
-        OversamplingCDR(samples_per_ui=4, samples_per_word=16, track_threshold=0)
+    import warnings
+    from amaranth.hdl import UnusedElaboratable
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UnusedElaboratable)   # __init__ raises before elaboration
+        with pytest.raises(ValueError):
+            OversamplingCDR(samples_per_ui=4, samples_per_word=16, track_threshold=0)
 
 
 def test_noisy_idle_then_packet_locks():
