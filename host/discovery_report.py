@@ -47,7 +47,8 @@ def render(t):
         name = f"rx{p}.{LANE_NAMES[int(l, 16)]}"
         if lane.seen:
             pol = "inverted" if lane.inverted else "true"
-            rows.append(f"{name:8s} <- {lane.peer} tx{lane.port}.{LANE_NAMES[lane.lane]} {pol}")
+            peer_lane = LANE_NAMES[lane.lane] if lane.lane < len(LANE_NAMES) else f"?{lane.lane:X}"
+            rows.append(f"{name:8s} <- {lane.peer} tx{lane.port}.{peer_lane} {pol}")
         else:
             rows.append(f"{name:8s} -")
     return "\n".join(rows)

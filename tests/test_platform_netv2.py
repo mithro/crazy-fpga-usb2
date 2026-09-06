@@ -74,3 +74,11 @@ def test_vivado_constraints_include_config_voltage_and_compression(tmp_path):
     assert "set_property CFGBVS VCCO [current_design]" in xdc
     assert "set_property CONFIG_VOLTAGE 3.3 [current_design]" in xdc
     assert "BITSTREAM.GENERAL.COMPRESS TRUE" in plan.files["t.tcl"]
+
+
+def test_xray_toolchain_gets_no_vivado_only_constraints(tmp_path):
+    from usb2soft.platforms.netv2 import NeTV2Platform
+    plat = NeTV2Platform(variant="a7-35", toolchain="Xray")
+    plan = plat.build(_Blink(), name="t", build_dir=str(tmp_path), do_build=False)
+    assert "current_design" not in plan.files["t.xdc"]
+    assert "LOC K21" in plan.files["t.xdc"]

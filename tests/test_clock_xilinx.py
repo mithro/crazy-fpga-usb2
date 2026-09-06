@@ -21,7 +21,7 @@ class _Top(Elaboratable):
         else:
             sol = solve(kind="mmcm", speed="-2", fin=60e6, vco=960e6,
                         outputs={"rx_io": 480e6, "rx_io90": (480e6, 90.0), "usb": 60e6})
-            m.submodules.mmcm = mmcm = MMCME2(sol, clkin=self.clkin, fine_ps=True)
+            m.submodules.mmcm = mmcm = MMCME2(sol, clkin=self.clkin, fine_ps=True, ps_clk=self.clkin)
             m.d.comb += self.out.eq(mmcm.clocks["rx_io"] ^ mmcm.clocks["rx_io90"] ^ mmcm.clocks["usb"] ^ mmcm.locked)
         return m
 

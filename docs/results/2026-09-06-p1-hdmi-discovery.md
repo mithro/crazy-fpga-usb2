@@ -13,6 +13,7 @@ Applet: `usb2soft/applets/hdmi_discovery.py`; parser: `host/discovery_report.py`
 | Variant | WNS | WHS | WPWS | LUTs | FFs | IOB | IBUFDS | BUFG | PLL |
 |---------|-----|-----|------|------|-----|-----|--------|------|-----|
 | a7-100 (`c441601`) | 9.203 ns | 0.072 ns | 6.667 ns | 1430 | 2669 | 34 | 8 | 2 | 1 |
+| a7-35 (`c441601`) | 8.045 ns | 0.047 ns | 6.667 ns | 1430 | 2669 | 34 | 8 | 2 | 1 |
 
 The applet is a test instrument (16 UART receivers, 8 transmitters, two text
 reporters); its size is not part of the PHY budget.
@@ -42,13 +43,17 @@ same day. Nothing on the FPGA side needs enabling for the input path (plain
 IBUFDS on TMDS_33 with the board's pull-ups); a source cable into `hdmi_in 0`
 is all that is missing.
 
-One artefact in the raw log: `rx0.d0` reported peer `008080`, lane `00`,
-flags `00`. That is a stale value from a single chance match of the 6-byte
-window on a floating lane (`A5 00 80 80 00 00` has a valid XOR checksum);
-`seen` had already timed out. The listener now requires two consecutive
-frames that agree on id, lane and polarity before reporting a lane as seen
+One artefact in the raw log, on `rx0.d0` (line `R01`): the first two
+reports show peer `F8E27E`, lane `FF`, flags `02` (a stale inverted-polarity
+match, `seen` = 0), the third shows peer `008080`, lane `00`, flags `01`, i.e.
+**`seen` = 1 for a phantom peer**, and the last two show the same peer with
+`seen` back to 0. These are single chance matches of the 6-byte window on a
+floating lane (`A5 00 80 80 00 00` has a valid XOR checksum) and the
+single-match listener really did report one as a live peer for one report
+period. The listener now requires two consecutive frames that agree on id,
+lane and polarity before reporting a lane as seen
 (`test_single_or_disagreeing_frames_are_ignored`). The bitstream that
-produced this log predates that change.
+produced this log (`c441601`) predates that change.
 
 ## rpi3-netv2 (NeTV2 XC7A35T)
 

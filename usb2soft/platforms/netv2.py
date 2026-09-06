@@ -89,16 +89,24 @@ class NeTV2Platform(XilinxPlatform):
         self.device = VARIANTS[variant]
         super().__init__(toolchain=toolchain)
 
+    # Vivado-only settings. The Xray (openXC7) template also renders ``add_constraints`` into its
+    # XDC, and nextpnr-xilinx does not understand ``current_design`` properties, so these are
+    # applied for the Vivado toolchain only.
+    VIVADO_CONSTRAINTS = (
+        # Bank 0 is powered from 3.3 V on the NeTV2; silences DRC CFGBVS-1.
+        "set_property CFGBVS VCCO [current_design]",
+        "set_property CONFIG_VOLTAGE 3.3 [current_design]",
+    )
+    # Compressed bitstreams load several times faster over bit-banged GPIO JTAG.
+    VIVADO_BEFORE_BITSTREAM = "set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]"
+
     def toolchain_prepare(self, fragment, name, **kwargs):
-        overrides = {
-            # Bank 0 is powered from 3.3 V on the NeTV2; silences DRC CFGBVS-1.
-            "add_constraints": "\n".join([
-                "set_property CFGBVS VCCO [current_design]",
-                "set_property CONFIG_VOLTAGE 3.3 [current_design]",
-            ]),
-            # Compressed bitstreams load several times faster over bit-banged GPIO JTAG.
-            "script_before_bitstream":
-                "set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]",
-        }
-        overrides.update(kwargs)
+        overrides = dict(kwargs)
+        if self.toolchain == "Vivado":
+            extra = "\n".join(self.VIVADO_CONSTRAINTS)
+            caller = overrides.get("add_constraints")
+            overrides["add_constraints"] = f"{extra}\n{caller}" if caller else extra
+            before = overrides.get("script_before_bitstream")
+            overrides["script_before_bitstream"] = (
+                f"{self.VIVADO_BEFORE_BITSTREAM}\n{before}" if before else self.VIVADO_BEFORE_BITSTREAM)
         return super().toolchain_prepare(fragment, name, **overrides)

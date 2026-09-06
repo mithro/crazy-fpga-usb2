@@ -20,6 +20,8 @@ class _ClockManager(Elaboratable):
                  ps_en=None, ps_incdec=None, ps_done=None):
         if len(solution.outputs) > self.max_outputs:
             raise ValueError(f"{self.primitive} has only {self.max_outputs} outputs")
+        if fine_ps and ps_clk is None:
+            raise ValueError("fine_ps=True needs a ps_clk (PSCLK) signal")
         self.solution = solution
         self.clkin = clkin
         self.reset = Const(0) if reset is None else reset

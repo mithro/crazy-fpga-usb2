@@ -8,7 +8,8 @@ __all__ = ["Console"]
 
 class Console(Elaboratable):
     def __init__(self, segments, *, divisor, domain="sync"):
-        assert domain == "sync", "LUNA's UARTTransmitter uses the sync domain"
+        if domain != "sync":
+            raise ValueError("LUNA's UARTTransmitter uses the sync domain")
         self.reporter = TextReporter(segments, domain=domain)
         self.divisor = divisor
         self.domain = domain

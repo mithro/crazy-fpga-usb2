@@ -15,7 +15,7 @@ UART_BAUD = 115200
 def git_describe():
     try:
         return subprocess.check_output(["git", "describe", "--tags", "--dirty", "--always"],
-                                       text=True).strip()
+                                       text=True, stderr=subprocess.DEVNULL).strip()
     except Exception:
         return "unknown"
 
@@ -55,7 +55,7 @@ class HelloCore(Elaboratable):
         m.d.comb += [
             self.console.trigger.eq(tick & self.dna_valid),
             self.uart_tx.eq(self.console.tx),
-            self.leds[0].eq(seconds[0]),
+            self.leds[0].eq(seconds[0]),      # 1 Hz heartbeat (same bit as leds[2], kept as the obvious blinker)
             self.leds[1].eq(self.locked),
             self.leds[2:6].eq(seconds),
         ]
