@@ -71,3 +71,17 @@ The `--role host` build puts host-lite behind the pins for the other board. Two-
 load `--role host` on board A and `--role device` on board B with A.TX0 → B.RX0 and B.TX0 → A.RX0
 cables; board A's UART line shows the enumeration counters, board B's the chirp count and `hs`.
 Blocked on cabling / `pi` key on the cross-connected units, as in P4.
+
+## Re-run after the code review (2026-09-07 05:40)
+
+The review changed host-lite (token→DATA gap now latched per step at 16 usb cycles = 128 bit
+times; a fault-triggered restart now goes silent for 6 ms so the device really re-enumerates;
+HS frame number advances every 8 microframes) and added tests for the bad-reply, restart,
+dead-link-recovery and SOF-acceptance paths plus a `slow` test with LUNA's real timings (passes,
+98 s). Rebuilt `device-test-internal` (WNS 0.094 ns, 2225 LUTs / 1856 FFs) on rpi5-netv2,
+`logs/2026-09-07-devicetest-internal-rpi5-head.log`: 1 077 387 → 8 894 324 loops (269 550 /s),
+26.7 M ok replies, 0 bad / timeouts / naks / restarts, 1 chirp, `hs = 1` on all 30 lines.
+
+Latency caveat (from the review): the 72–116 bit-time figure is measured from the last sample
+word the host model played to the first driven line bit (±4 bit times), and excludes the
+ISERDES/OSERDES primitives (≈ 20–25 bit times more in silicon, P3): worst case ≈ 140 < 192.
