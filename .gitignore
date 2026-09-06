@@ -6,7 +6,7 @@ __pycache__/
 dist/
 
 # Build outputs and reports that are regenerated
-build/
+/build/
 *.bit
 *.bin
 *.vcd
