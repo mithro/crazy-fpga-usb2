@@ -61,3 +61,13 @@ D 0077BEAA 01673C04 00000000 00000000 00000000 00000000 00040728 0001 1 00282674
   at real clock rates, with a genuine 7.6× out-of-spec frequency offset in both directions.
   What it does not: the SelectIO front-end (needs a physical channel) and full-speed line
   states / a real host (needs set-up 2 or 3 and a level-based line state).
+
+## HDMI variant (built, untested: no channel)
+
+`device-test --mode hdmi --role device` (device PHY on HDMI RX0 lane 0 / TX0 lane 0, with the
+synthesiser, no host-lite): `build/device-test-hdmi-device-rx0-netv2-a7-100/vivado`, WNS 0.299 ns,
+WHS 0.050 ns, WPWS 0.491 ns (480 MHz BUFG), 1272 LUTs / 1097 FFs, 2× ISERDESE2 + OSERDESE2 placed.
+The `--role host` build puts host-lite behind the pins for the other board. Two-board procedure:
+load `--role host` on board A and `--role device` on board B with A.TX0 → B.RX0 and B.TX0 → A.RX0
+cables; board A's UART line shows the enumeration counters, board B's the chirp count and `hs`.
+Blocked on cabling / `pi` key on the cross-connected units, as in P4.
