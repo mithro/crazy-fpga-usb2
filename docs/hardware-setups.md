@@ -18,6 +18,22 @@ for `xc7a35tfgg484` / `xc7a35tcsg324` and the litex-boards platform files on
 | 3 | NeTV2 direct USB via PCIe "hax"/SMBus pair + bunnie's `netv2mvp-usb3-v1` breakout | real USB connector to a real host: FS line states, reset, chirp, HS data (with the adaptor network below) | nothing else once the network exists | needs the breakout and a resistor network; not installed on any Welland board today |
 | 4 | Arty A7 PMOD + USB breakout, Raspberry Pi as host | same as 3 on the Arty fleet, plus the Pi is right there as host | — | needs a PMOD USB breakout and the resistor network |
 | 5 | Future purpose-built board | everything | — | pin requirements in §6 |
+| 0 | NeTV2 internal loopback with an offset TX PLL (no cable) | the whole digital datapath at real clock rates, CDR tracking of a genuine ±4000 ppm frequency offset, MMCM/PLL clock plan | the SelectIO front-end (ISERDES/OSERDES, IDELAY), real signal integrity | **works on `rpi5-netv2`** (`link-test --mode internal|async-fast|async-slow`, §0) |
+
+## 0. NeTV2 internal loopback (no cable)
+
+`uv run usb2soft build link-test --variant a7-100 --mode internal|async-fast|async-slow`
+runs `TxPath → wire model → RxPath` inside the FPGA on any NeTV2 with only the
+UART connected. `internal` expands the encoder's 4 line bits into 16 samples
+per 120 MHz cycle (a synchronous loopback). `async-fast` / `async-slow` clock
+the TX path from a second PLLE2 at 120.4545 MHz (+3788 ppm) / 119.4444 MHz
+(−4630 ppm) and cross into the 120 MHz CDR domain through `AsyncResampler`
+(`usb2soft/sim/expander.py`), which drops or repeats single samples: the CDR
+sees exactly what a host crystal at that offset would produce. Both are well
+outside the USB 2.0 limit of ±500 ppm. The UART line
+`L <tx> <good> <bad> <err> <gaps> <slip_up> <slip_down> <phase>` gives the
+packet counters and the CDR's slip counts (one slip per 1/(4·ppm) UI in the
+direction of the offset). Results: `docs/results/2026-09-07-p4-link-hardware.md`.
 
 ## 1. NeTV2 ↔ NeTV2 over HDMI
 
