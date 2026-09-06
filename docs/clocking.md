@@ -39,8 +39,18 @@ clk50 (J19) ──► PLLE2_ADV ×24 = 1200 MHz VCO
   rule of UG471 is trivially met. The interleaved streams give 16 samples per
   120 MHz cycle, 4 per UI.
 - Alternative (parameter): second ISERDES clocked by a 90°-shifted 480 MHz
-  MMCM output instead of the IDELAY. Only if Vivado's timing analysis of the
-  ISERDES internal CLK→CLKDIV transfer is clean.
+  MMCM output *and* its own 22.5°-shifted 120 MHz CLKDIV (UG471 requires
+  NETWORKING-mode CLK and CLKDIV of one ISERDES to be phase aligned; giving
+  ISERDES #2 both shifted clocks keeps that rule). The two 16-bit words are
+  then combined as a related-clock fabric path. Costs one MMCM output and two
+  BUFGs, saves the IDELAYCTRL.
+
+## -1 speed grade plan (Arty A7-35T, `xc7a35ticsg324-1L`)
+
+BUFG ≤ 464 MHz and MMCM VCO ≤ 1200 MHz rule out 480 MHz sampling. Use the 3x
+two-ISERDES sampler: PLL 100 MHz × 12 = 1200 MHz VCO → 60 MHz and 300 MHz;
+MMCM 60 MHz × 12 = 720 MHz VCO → 360 MHz (`rx_io`, DDR 6:1 → 12 samples per
+120 MHz cycle), 240, 120, 60. IDELAY offset half a sample = 694 ps ≈ 13 taps.
 - Every fabric domain (`usb`, `rx_cdr`) is an MMCM sibling with an integer
   ratio, so `rx_cdr`→`usb` is a synchronous 2:1 gearbox, not a FIFO.
 
@@ -56,10 +66,12 @@ clk50 (J19) ──► PLLE2_ADV ×24 = 1200 MHz VCO
 ## Fine phase shift (P6)
 
 Each PSEN step moves the selected outputs by 1/56 of the VCO period: 18.6 ps
-at 960 MHz. A step needs about 12 PSCLK cycles. With PSCLK = 120 MHz that is
-one step per 100 ns → 186 ppm of pull range; PSCLK = 240 MHz → 372 ppm. All
-outputs carry `USE_FINE_PS=TRUE` so the whole fabric and I/O clock tree slews
-together and the RX/TX/UTMI relationship is untouched.
+at 960 MHz. A step needs about 12 PSCLK cycles. With PSCLK = 240 MHz (the
+`tx_io` clock; limit 500 MHz on -2) that is one step per 50 ns → ≈370 ppm of
+pull range. The shift wraps round-robin without limit (UG472), so continuous
+stepping is a true frequency offset. All outputs carry `USE_FINE_PS=TRUE` so
+the whole fabric and I/O clock tree slews together and the RX/TX/UTMI
+relationship is untouched.
 
 ## Domain summary
 

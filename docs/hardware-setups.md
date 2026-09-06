@@ -107,12 +107,18 @@ ends; FS is 3.3 V CMOS levels with a 1.5 kΩ pull-up on D+ and 15 kΩ
 pull-downs at the host. A 3.3 V HR bank can approximate both with a passive
 network per line:
 
-- **Receive**: D+/D- into an `IBUFDS` (differential, `LVDS_25`-compatible
-  input in a 3.3 V bank is allowed for inputs when the common mode is in
-  range; `TMDS_33` also works) for HS data and chirp detection, and into two
-  `LVCMOS33` single-ended inputs for FS line state. This needs the lines
-  fanned out to three FPGA pins each side, or a differential pair plus two
-  single-ended taps.
+- **Receive**: D+/D- into an `IBUFDS` for HS data and chirp detection, and
+  into two `LVCMOS33` single-ended inputs for FS line state. This needs the
+  lines fanned out to three FPGA pins each side, or a differential pair plus
+  two single-ended taps.
+- **Common mode (hard requirement)**: HS and chirp signalling sit at 0–400 mV
+  (common mode ≈200 mV, chirp ≈800 mV single-ended) but a 7-series `LVDS_25`
+  receiver needs V_ICM ≥ 0.3 V (DS181 Table 10) and `TMDS_33` needs
+  2.7–3.23 V. The network must shift the common mode into the receiver's
+  window: either AC-couple the differential tap and bias it (fine for HS
+  packets, loses DC chirp levels unless the bias path is slow enough) or a
+  resistive level shift from 3.3 V. Without this the differential receiver's
+  output is undefined and no set-up 3/4/5 result is meaningful.
 - **HS termination**: an FPGA output driving low through 45 Ω is a 45 Ω
   termination to ground; tri-stating it removes the termination for FS mode.
   One pin per line (`term_en`).

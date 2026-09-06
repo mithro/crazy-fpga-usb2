@@ -1,7 +1,8 @@
 # USB 2.0 High-Speed soft PHY on Artix-7 SelectIO — design
 
 Date: 2026-09-06
-Status: draft for review
+Status: revision 2 after subagent review (EOP pattern, SYNC threshold, LUNA
+reset/chirp path, ISERDES clocking rule, -1 speed grade, common mode)
 Repository: `mithro/crazy-fpga-usb2` (private)
 
 ## 1. Goal
@@ -81,14 +82,24 @@ platform:
    full-speed line states plus an approximation of HS levels.
 3. **Arty A7 PMOD USB breakout with a Raspberry Pi as host.** Welland has Arty
    A7 boards on Pis with PMOD HATs; a USB breakout on a PMOD gives a real USB
-   host (the Pi) talking to the FPGA. Same resistor-network requirements.
+   host (the Pi) talking to the FPGA. Same resistor-network requirements. The
+   Arty A7-35T is an `xc7a35ticsg324-1L` (speed grade -1), whose BUFG
+   (464 MHz) and MMCM VCO (1200 MHz) limits rule out the 480 MHz default clock
+   plan; it uses the in-spec 3x plan in §4.7.
+
+Receiver common mode matters for set-ups 2 and 3: HS signalling swings
+0–400 mV (common mode ≈200 mV) while a 7-series `LVDS_25` input needs
+V_ICM ≥ 0.3 V and `TMDS_33` needs 2.7–3.23 V (DS181 Table 10). The resistor
+network must therefore also shift the common mode into the receiver's range
+(AC coupling with a bias, or a resistive level shift); this is recorded in
+`docs/hardware-setups.md` as a hard requirement.
 
 For a future "proper" board the document specifies the pin set the PHY wants:
-one differential input pair (D+/D-), two single-ended inputs (D+, D-) for
-full-speed line state, one differential or two single-ended outputs through a
-resistor network able to produce both 3.3 V FS levels and ~400 mV HS levels
-into 45 Ω, and a pull-up enable. These are recorded as requirements, not
-designed here.
+one differential input pair (D+/D-) with a common-mode-compatible network,
+two single-ended inputs (D+, D-) for full-speed line state, one differential or
+two single-ended outputs through a resistor network able to produce both 3.3 V
+FS levels and ~400 mV HS levels into 45 Ω, and a pull-up enable. These are
+recorded as requirements, not designed here.
 
 ## 4. Architecture
 
@@ -107,26 +118,37 @@ designed here.
 
 ### 4.1 Sampler front-end (`usb2soft.rx.sampler`)
 
-Default: **4x oversampling with two ISERDESE2 per pair.** `IBUFDS_DIFF_OUT`
-feeds the P-side ILOGIC with `O` and the N-side ILOGIC with `OB` (inverted in
-fabric). Both ISERDESE2 run `NETWORKING`, `DDR`, `DATA_WIDTH=8`, CLK = 480 MHz
-and CLKDIV = 120 MHz. The second ISERDES gets a 480 MHz clock shifted by 90°,
-so the interleaved streams sample at 1920 MS/s: 16 samples per 120 MHz cycle,
-4 per UI. All clocks are BUFG-driven (480 MHz is within the -2 BUFG limit of
-628 MHz), which removes clock-region constraints and the BUFIO/BUFR
-primitives that nextpnr-xilinx lacks.
+Default: **4x oversampling with two ISERDESE2 per pair, offset by IDELAY**
+(the XAPP523 arrangement). `IBUFDS_DIFF_OUT` feeds the P-side ILOGIC with `O`
+and the N-side ILOGIC with `OB` (inverted in fabric). Both ISERDESE2 run
+`NETWORKING`, `DDR`, `DATA_WIDTH=8`, with the *same* CLK = 480 MHz and
+CLKDIV = 120 MHz, so UG471's rule that NETWORKING-mode CLK and CLKDIV be
+phase aligned is met trivially. The `OB` path passes through an IDELAYE2
+(`VAR_LOAD`, ≈10 taps of 52 ps with a 300 MHz IDELAYCTRL reference ≈ 0.52 ns,
+half a sample period; tunable at run time), so the interleaved streams sample
+at 1920 MS/s: 16 samples per 120 MHz cycle, 4 per UI. All clocks are
+BUFG-driven (480 MHz is within the -2 BUFG limit of 628 MHz), which removes
+clock-region constraints and the BUFIO/BUFR primitives that nextpnr-xilinx
+lacks. The run-time-loadable delay is also the hook for later software eye
+alignment.
 
 Fallback variants, selectable by parameter, share the same downstream logic:
 
-- 4x, single clock phase, second path offset by IDELAYE2 (~7 taps ≈ 0.52 ns)
-  with IDELAYCTRL on a 200 MHz reference. Used if the two-phase ISERDES
-  clocking fails timing analysis.
-- 3x, one ISERDESE2, DDR 6:1, CLK = 720 MHz on BUFIO, CLKDIV = 240 MHz,
-  followed by a 2:1 gearbox to 120 MHz (12 samples/cycle). Fewest resources
-  but 720 MHz exceeds the -2 BUFIO limit (710 MHz); Vivado-only. Built and
-  measured for the resource comparison the user asked for.
-- 3x, two ISERDESE2, DDR 6:1, CLK = 360 MHz 0°/90°, CLKDIV = 120 MHz
-  (12 samples/cycle). In-spec 3x.
+- 4x, two clock phases instead of IDELAY: ISERDES #2 gets CLK at 90° *and its
+  own CLKDIV at the matching 22.5° offset* (both from the MMCM; 5.625° phase
+  resolution at ÷8 makes 22.5° exact), so each ISERDES keeps aligned
+  CLK/CLKDIV and the two words are combined in fabric as a related-clock path
+  with a ≈7.8 ns budget. Costs one MMCM output and two BUFGs more, no
+  IDELAYCTRL. Used if IDELAY tap drift or openXC7 IDELAY support becomes a
+  problem.
+- 3x, one ISERDESE2, DDR 6:1, CLK = 720 MHz on BUFIO, CLKDIV = 240 MHz
+  (BUFR ÷3), followed by a 2:1 gearbox to 120 MHz (12 samples/cycle). Fewest
+  resources but 720 MHz exceeds the -2 BUFIO limit (680 MHz, DS181 Table 33);
+  Vivado-only. Built and measured for the resource comparison the user asked
+  for.
+- 3x, two ISERDESE2, DDR 6:1, CLK = 360 MHz BUFG, IDELAY offset ≈0.69 ns
+  (13 taps), CLKDIV = 120 MHz (12 samples/cycle). In spec on -2 **and -1**
+  (BUFG ≤464 MHz, VCO 720 MHz); this is the plan for the Arty A7 (-1L).
 
 The sampler also exposes the raw sample word for a debug tap.
 
@@ -140,7 +162,9 @@ multiple of `S`). State: pick phase `φ ∈ [0, S)`; the picks in a cycle are at
    sample.
 2. Each edge votes on where the ideal pick is (edge + S/2 samples later). The
    vote is the difference from the current pick grid modulo `S`, mapped to
-   {-1, 0, +1} (for S=4 the ambiguous ±2 case abstains).
+   {-1, 0, +1}; for S=4 the equidistant case (difference 2, pick sitting on
+   the sample right after the transition) votes +1 rather than abstaining, so
+   the worst sampling point is never a stable equilibrium.
 3. Votes feed a saturating up/down loop filter. In *acquire* mode (no packet
    active) the threshold is 1 so the SYNC's edge-every-bit pattern aligns the
    phase within a few bits. In *track* mode the threshold is higher (2–4,
@@ -170,12 +194,18 @@ bits per 60 MHz cycle. Word-parallel stages, each carrying state across
 cycles:
 
 - **NRZI decode**: `d[i] = ~(b[i] ^ b[i-1])`, previous raw bit carried.
-- **SYNC / packet detect**: HS SYNC is up to 32 bits (hubs may strip down to
-  12): decoded as ≥12 zeros then a one. The bit after the one is bit 0 of the
-  PID. Mirrors `RxPacketDetect`.
+- **SYNC / packet detect**: HS SYNC is 32 bits (KJKJ…KK), of which up to 20
+  may be stripped by five hubs, leaving 12 bits = 11 decoded zeros then a
+  one, and the CDR consumes a bit or two acquiring. The detector therefore
+  requires **≥8 decoded zeros followed by a one**; the bit after the one is
+  bit 0 of the PID. Mirrors `RxPacketDetect` (which needs only 5 of FS's 7
+  zeros).
 - **Bit unstuff**: running count of ones; after six ones the next bit is
   dropped. Seven consecutive ones inside a packet is the HS EOP (a deliberate
-  stuffing violation), which closes the packet. Mirrors `RxBitstuffRemover`.
+  stuffing violation), which closes the packet. The EOP is the NRZ byte
+  `01111111` (a zero, then seven ones, no stuffing), so at the violation the
+  packer must hold exactly 7 bits since the last byte boundary; anything else
+  is `rx_error`. Mirrors `RxBitstuffRemover`.
 - **Byte packer**: variable-count shift-in (0–10 bits), byte-out when ≥8 are
   held, into a small elastic FIFO (16 bytes) that drains during inter-packet
   gaps. Needed because a faster host delivers slightly more than 8 bits per
@@ -184,33 +214,65 @@ cycles:
   the host's clock offset is absorbed in the CDR, not in a FIFO.
 - **UTMI outputs**: `rx_active` from SYNC until the EOP byte has drained,
   `rx_valid`/`rx_data` per byte, `rx_error` on a packet that ends unaligned.
+- **Turnaround budget**: a HS device must start its response within 192 bit
+  times (400 ns, 24 `usb` cycles) of the last received bit. The plan must
+  account RX pipeline + elastic drain + LUNA's response + TX SYNC start +
+  OSERDES latency against that figure; LUNA's `USBInterpacketTimer` assumes
+  ULPI-PHY-like latencies, so the PHY's RX-to-`rx_active`-low and
+  `tx_valid`-to-first-bit latencies are measured in simulation and recorded.
 
 ### 4.4 TX path (`usb2soft.tx`)
 
 - **TxEncoder** (usb domain): on `tx_valid` rising, emit the 32-bit SYNC, then
-  bytes LSB-first with stuffing (a zero after six ones), NRZI, then EOP (eight
-  ones; extended SOF EOP is a host-only concern). Mirrors
+  bytes LSB-first with stuffing (a zero after six ones), NRZI, then the EOP
+  byte `01111111` in NRZ (a zero forcing one transition, then seven ones with
+  stuffing disabled, so the violation lands byte-aligned regardless of how
+  the CRC ended; the 40-bit SOF EOP is host-only). Mirrors
   `TxShifter`/`TxBitstuffer`/`TxNRZIEncoder`, word-parallel.
 - **Elastic gearbox**: a bit accumulator that always hands exactly 8 raw bits
   per cycle to the serialiser and asserts `tx_ready` only when it can accept
   another byte; stuffing makes some bytes cost 9 bits, which is exactly when
   UTMI expects `tx_ready` to drop.
-- **Serialiser**: OSERDESE2 `DDR`, `DATA_WIDTH=8`, `TRISTATE_WIDTH=1`, CLK =
-  240 MHz, CLKDIV = 60 MHz, into OBUFTDS. Tristate is byte-granular, which is
-  sufficient because EOP is exactly one byte. Idle = driver off.
-- `op_mode = 2` (no NRZI/no stuffing, used for chirp) bypasses encoder and
-  drives a constant level.
+- **Serialiser**: OSERDESE2 `DDR`, `DATA_WIDTH=8`, `TRISTATE_WIDTH=1`,
+  `DATA_RATE_TQ="BUF"`, CLK = 240 MHz, CLKDIV = 60 MHz, into OBUFTDS.
+  Tristate is byte-granular, which is sufficient because EOP is exactly one
+  byte, but the T path has far less latency than the 8:1 data path, so the
+  fabric delays the T assertion/de-assertion by the measured data-path latency
+  (a simulation test pins the number). Idle = driver off.
+- `op_mode = 2` (no NRZI/no stuffing, used for chirp) bypasses the encoder and
+  drives the level given by `tx_data[0]` while `tx_valid` (0 → K, as LUNA's
+  reset sequencer expects).
 
 ### 4.5 Line state, chirp and reset (`usb2soft.phy.linestate`)
 
-Only meaningful with single-ended D+/D- inputs (set-ups 2 and 3). Two
-FFSynchronizers plus a 2-of-3 filter at 60 MHz produce UTMI `line_state`
-(SE0/J/K/SE1). In HS mode LUNA's reset sequencer drives `op_mode`,
-`term_select` and `xcvr_select`; the PHY maps them to pull-up enable, HS
-termination enable (a resistor network control pin) and chirp K/J drive. Host
-chirp K/J (≈800 mV differential DC) is detected on the differential input via
-the CDR's `activity`-less static level path. The HDMI-only platform hard-codes
-`line_state` to J/HS-idle and reports "HS-only" so LUNA skips the chirp.
+LUNA has no "high-speed only" mode: its reset sequencer reaches HS only by
+walking the real sequence (SE0 ≥ 2.5 µs → device chirp K → three host K/J
+pairs each ≥ 2.5 µs → `IS_HIGH_SPEED`), drops back to FS if `line_state`
+reads SE0 for 3 ms while in HS, and needs `session_end = 0` to leave bus
+reset. The PHY therefore produces a UTMI-correct `line_state` in every mode:
+
+- **FS mode** (set-ups 2/3, single-ended inputs): two FFSynchronizers plus a
+  2-of-3 filter at 60 MHz give SE0/J/K/SE1 from the 3.3 V levels.
+- **Chirp**: host chirp K/J are ≈800 mV differential DC, below LVCMOS33 V_IH,
+  so while `xcvr_select` selects HS and `term_select` is in chirp mode,
+  `line_state` is taken from the differential receiver's static level
+  (K = 0b10, J = 0b01). Device chirp K is driven through `op_mode = 2`.
+- **HS mode**: HS traffic is also below V_IH, so `line_state` is
+  squelch-derived as in a real UTMI PHY: SE0 while the CDR reports no
+  activity, J/K (from the differential level) while a packet is on the wire.
+  A genuine HS reset (SE0 > 3 ms) is then detected by LUNA exactly as with a
+  hardware PHY.
+- **HDMI platform** (set-up 1, no FS levels possible): the platform's
+  `LineStateSynthesiser` replays the reset-and-chirp sequence towards LUNA at
+  power-up (SE0, then the three host K/J chirp pairs with legal durations),
+  after which HS-mode squelch-derived `line_state` applies. The far-end board
+  is told over the link, or simply assumed, to be in HS. This keeps LUNA
+  unmodified and puts the fiction in one small, clearly named platform block.
+
+`op_mode`, `term_select` and `xcvr_select` from LUNA map to pull-up enable, HS
+termination enable and chirp drive on the platforms that have those pins;
+`session_end` is tied to 0 (VBUS assumed present, as luna-boards does for the
+NeTV2) and `vbus_valid` to 1.
 
 ### 4.6 `SoftUTMIPHY` and LUNA integration (`usb2soft.phy`)
 
@@ -225,22 +287,30 @@ during `elaborate`. No LUNA source changes.
 
 ### 4.7 Clocking (`usb2soft.clock`)
 
-NeTV2 input is 50 MHz. Two cascaded primitives, following the luna-boards
-NeTV2 and LiteVideo precedents:
+NeTV2 input is 50 MHz. Two cascaded primitives (the MMCM-cascade pattern of
+the luna-boards NeTV2 platform and LiteVideo's `S7Clocking`; note LiteVideo
+then uses BUFIO/BUFR for its ISERDES clocks, which this design deliberately
+does not):
 
-- PLLE2_ADV: 50 MHz × 24 = 1200 MHz VCO → 60 MHz (÷20, `usb`) and 200 MHz
-  (÷6, IDELAYCTRL reference when used).
-- MMCME2_ADV fed by the 60 MHz: ×16 = 960 MHz VCO → 480 MHz at 0° and 90°
-  (sampler CLKs), 240 MHz (TX OSERDES CLK), 120 MHz (`rx_cdr`, sampler
-  CLKDIV), 60 MHz (`usb`; the PLL's 60 MHz is only the MMCM reference so all
-  fabric domains are MMCM siblings with known phase).
-- The 3x variants use ×24 = 1440 MHz VCO → 720/360/240/120/60.
+- PLLE2_ADV: 50 MHz × 24 = 1200 MHz VCO (PLL range 800–1866 MHz) → 60 MHz
+  (÷20, MMCM reference) and 300 MHz (÷4, IDELAYCTRL reference, 52 ps taps).
+- MMCME2_ADV fed by the 60 MHz: ×16 = 960 MHz VCO → 480 MHz (sampler CLK,
+  both ISERDES), 240 MHz (TX OSERDES CLK and PSCLK), 120 MHz (`rx_cdr`,
+  sampler CLKDIV), 60 MHz (`usb`; the PLL's 60 MHz is only the MMCM reference
+  so all fabric domains are MMCM siblings with known phase). The two-phase
+  fallback adds 480 MHz @ 90° and 120 MHz @ 22.5°; 6 of the 7 outputs.
+- -2 3x variants use ×24 = 1440 MHz VCO (the -2 maximum) → 720/360/240/120/60.
+  The -1 (Arty) plan uses ×12 = 720 MHz VCO → 360/240/120/60 with the
+  two-ISERDES 3x sampler; every clock is then within -1 limits (BUFG 464 MHz,
+  VCO 600–1200 MHz).
 - All MMCM outputs have `USE_FINE_PS=TRUE` so P6 can slew the entire clock
   tree together (see 4.8). Resets are `~locked` through `ResetSynchronizer`.
-- Domains: `usb` (60), `rx_cdr` (120), `rx_io0`/`rx_io1` (480 0°/90°, or
-  BUFIO variants), `tx_io` (240), `sync` (= `usb`, control/UART).
-- One sampler per bank in the HDMI platform; the two-phase BUFG design has no
-  clock-region coupling, so a second RX pair costs only two more ISERDES.
+- Domains: `usb` (60), `rx_cdr` (120), `rx_io` (480; plus `rx_io90` in the
+  two-phase fallback), `tx_io` (240), `idelay_ref` (300), `sync` (= `usb`,
+  control/UART).
+- One sampler per bank in the HDMI platform; the BUFG-only design has no
+  clock-region coupling, so a second RX pair costs two more ISERDES and one
+  IDELAY.
 
 CDC rules: `usb`↔`rx_cdr` is a synchronous 2:1 gearbox; control/status to a
 UART/CSR block uses `FFSynchronizer`/`PulseSynchronizer` from
@@ -258,11 +328,12 @@ designs. Design:
   window of received bits; the sign and magnitude are the local-vs-host
   frequency error.
 - `MMCMPhaseSlewer`: drives PSEN/PSINCDEC/PSDONE to step every
-  `USE_FINE_PS` output by 1/56 VCO period per request. Continuous stepping is a
-  frequency offset. With VCO 960 MHz and PSCLK 120 MHz the pull range is about
-  ±180 ppm (each step ≈18.6 ps, ≥12 PSCLK cycles per step); saturation is
-  reported and the design keeps working un-disciplined because the CDR still
-  absorbs the offset.
+  `USE_FINE_PS` output by 1/56 VCO period per request; the shift wraps
+  round-robin without limit (UG472), so continuous stepping is a frequency
+  offset. With VCO 960 MHz (18.6 ps per step, ≥12 PSCLK cycles per step) and
+  PSCLK = 240 MHz (limit 500 MHz on -2) the pull range is about ±370 ppm;
+  saturation is reported and the design keeps working un-disciplined because
+  the CDR still absorbs the offset.
 - Loop: a slow integral controller nulling the estimator; when locked, the CDR
   phase stays constant and TX bits are frequency-locked to the host.
 - Simulation uses a behavioural MMCM model (phase accumulator) and the same
@@ -362,11 +433,13 @@ numbers as the baseline for the optimisation review agents.
 
 | Risk | Mitigation |
 |------|------------|
-| ISERDES CLK at 90° from CLKDIV violates internal timing | IDELAY-offset variant; Vivado timing report is the arbiter |
+| IDELAY tap drift or missing openXC7 IDELAY support | two-phase variant with per-ISERDES aligned CLK/CLKDIV pairs (UG471 rule kept); both measured on hardware |
+| Arty A7 is speed grade -1 | dedicated -1 clock plan (3x, 720 MHz VCO), selected by platform |
 | Zero-differential idle makes the comparator chatter | digital squelch = activity timeout + mandatory SYNC; tested with noisy-idle wire model and on HDMI with tri-stated TX |
 | 720 MHz over-spec clocks (3x single) | default 4x/480 MHz plan; 3x variant is measurement-only |
 | nextpnr-xilinx lacks BUFIO/BUFR | default plan uses BUFGs only |
-| Host chirp/FS levels impossible on HDMI | HS-only platform mode; FS/chirp validated in simulation and on set-ups 2/3 |
+| Host chirp/FS levels impossible on HDMI | platform `LineStateSynthesiser` replays reset+chirp to LUNA; real FS/chirp validated in simulation and on set-ups 2/3 |
+| HS/chirp levels below 7-series receiver common-mode range | common-mode shift is a stated requirement of the adaptor network |
 | Board access: four cross-connected NeTV2s need `pi` key authorisation | flagged to user; P1 proceeds on rpi3-netv2/rpi5-netv2 (shared with other sessions; check `w` and recent files first, volatile loads only, never flash) |
 | Two NeTV2 dev boards are different parts (35T vs 100T) | platform `variant` parameter; chipdbs exist for both |
 | Machine memory pressure from other sessions | one Vivado run at a time, ≤2 sub-agents, builds under `build/` not `/tmp` |
