@@ -116,3 +116,18 @@ L 008A8404 008A8404 00000000 00000000 00000000 040FA545 00050396 0   (slow)
 - The offsets are 7.6× and 9.3× the USB 2.0 tolerance of ±500 ppm, so this covers the
   "lock even as the USB signal drifts" requirement on real silicon, at real clock rates, without
   a cable. It does not exercise the SelectIO front-end (that needs a physical channel).
+
+### Re-run at the review-fixed head (2026-09-07 03:06–03:21)
+
+Logs `logs/2026-09-07-linktest-{internal,async-fast,async-slow}-rpi5-head.log` (30 s each, new
+report format with the `ovf` field). A first rebuild that reset each clock domain from its own
+generator's LOCKED pin showed one bad and five lost packets at start-up in `async-fast` (the
+usb→`tx_async` byte FIFO was written while its read side was still in reset; see
+`docs/clocking.md`, "Reset ordering"); with all fabric domains released together from the last
+LOCKED in the chain:
+
+| Mode | Packets (first → last line) | bad / err / gaps / ovf | Slips per second |
+|---|---|---|---|
+| internal | 0x978605 → 0x9BBB83 | 0 / 0 / 0 / 0, `tx == good` on every line | 0 (one acquisition slip) |
+| async-fast | 2 215 571 → 10 247 024 | 0 / 0 / 0 / 0, `tx − good ∈ {0, 1}` | 1.69 M down, 8.3 k up |
+| async-slow | 2 200 634 → 10 177 919 | 0 / 0 / 0 / 0, `tx − good ∈ {0, 1}` | 2.06 M up, 10 k down |
