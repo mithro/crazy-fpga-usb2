@@ -40,7 +40,8 @@ def build_applet(name, *, platform, variant, toolchain, build_root="build", do_b
     load_builtin_applets()
     applet_cls = APPLETS[name]
     plat = get_platform(platform, variant=variant, toolchain=TOOLCHAINS[toolchain])
-    build_dir = Path(build_root) / f"{name}-{platform}-{variant}" / toolchain
+    tag = applet_cls.build_tag(args) if args is not None else ""
+    build_dir = Path(build_root) / f"{name}{tag}-{platform}-{variant}" / toolchain
     build_dir.mkdir(parents=True, exist_ok=True)
     env = vivado_env() if toolchain == "vivado" else xray_env()
     old = dict(os.environ)

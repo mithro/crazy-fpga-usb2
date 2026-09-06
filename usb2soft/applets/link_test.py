@@ -222,6 +222,11 @@ class LinkTest(Applet):
     description = "PHY TX->RX soak test: --mode internal (expander loopback) or hdmi (TX0.d0 -> RX<n>.d0)"
 
     @classmethod
+    def build_tag(cls, args):
+        mode = getattr(args, "mode", "internal")
+        return f"-{mode}" + (f"-rx{getattr(args, 'hdmi_rx', 0)}" if mode == "hdmi" else "")
+
+    @classmethod
     def add_arguments(cls, parser):
         parser.add_argument("--mode", choices=["internal", "hdmi"], default="internal")
         parser.add_argument("--phase-shift", type=int, default=1, help="internal mode: sample rotation 0..3")
