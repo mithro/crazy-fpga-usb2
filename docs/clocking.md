@@ -33,9 +33,9 @@ clk50 (J19) ──► PLLE2_ADV ×24 = 1200 MHz VCO
                   └─ ÷16 → 60 MHz   BUFG  usb    (OSERDESE2 CLKDIV, UTMI, LUNA)
 ```
 
-- The second ISERDESE2 sees the same data through `IBUFDS_DIFF_OUT.OB`
-  delayed by IDELAYE2 by half a sample period (≈521 ps ≈ 10 taps at 52 ps),
-  as in XAPP523. Both ISERDES share CLK and CLKDIV, so the CLK/CLKDIV phase
+- Both ISERDESE2 inputs go through an IDELAYE2 (as in XAPP523, so the
+  insertion delays match): the `O` path at tap 0, the `IBUFDS_DIFF_OUT.OB`
+  path delayed by half a sample period (≈521 ps ≈ 10 taps at 52 ps). Both ISERDES share CLK and CLKDIV, so the CLK/CLKDIV phase
   rule of UG471 is trivially met. The interleaved streams give 16 samples per
   120 MHz cycle, 4 per UI.
 - Alternative (parameter): second ISERDES clocked by a 90°-shifted 480 MHz
@@ -81,7 +81,9 @@ relationship is untouched.
 | `rx_cdr` | 120 MHz | BUFG | ISERDES CLKDIV, CDR |
 | `rx_io` | 480 MHz | BUFG | ISERDES CLK (both) |
 | `tx_io` | 240 MHz | BUFG | OSERDES CLK |
-| `idelay_ref` | 300 MHz | BUFG | IDELAYCTRL |
+| `idelay_ref` | 300 MHz | BUFG | IDELAYCTRL (one per sampler bank) |
+| `rx_io90` (fallback only) | 480 MHz @ 90° | BUFG | ISERDES #2 CLK in the two-phase variant |
+| `rx_cdr90` (fallback only) | 120 MHz @ 22.5° | BUFG | ISERDES #2 CLKDIV in the two-phase variant |
 
 Resets: `~locked` of the MMCM through `ResetSynchronizer` into each domain;
 the PLL lock gates the MMCM reset. ISERDES/OSERDES `RST` is held for a few

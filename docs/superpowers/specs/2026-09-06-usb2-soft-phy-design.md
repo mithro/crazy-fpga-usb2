@@ -66,8 +66,9 @@ Three physical set-ups are supported by the same gateware, selected by
 platform:
 
 1. **NeTV2 HDMI cross-link (available now).** HDMI TX pairs (OBUFTDS,
-   `TMDS_33`, bank 14/16) of one board to HDMI RX pairs (IBUFDS, `TMDS_33`,
-   bank 15/16, with the board's 50 Ω pull-ups) of another. This is a genuine
+   `TMDS_33`, TX0 bank 14 / TX1 bank 16) of one board to HDMI RX pairs
+   (IBUFDS, `TMDS_33`, RX0 bank 15 / RX1 bank 14, with the board's 50 Ω
+   pull-ups) of another. This is a genuine
    480 Mbit/s NRZI differential channel between two FPGAs with independent
    crystals, so it exercises CDR, framing, stuffing, drift and squelch
    behaviour. Tri-stating the TMDS driver leaves the receiver with a
@@ -123,10 +124,12 @@ Default: **4x oversampling with two ISERDESE2 per pair, offset by IDELAY**
 and the N-side ILOGIC with `OB` (inverted in fabric). Both ISERDESE2 run
 `NETWORKING`, `DDR`, `DATA_WIDTH=8`, with the *same* CLK = 480 MHz and
 CLKDIV = 120 MHz, so UG471's rule that NETWORKING-mode CLK and CLKDIV be
-phase aligned is met trivially. The `OB` path passes through an IDELAYE2
-(`VAR_LOAD`, ≈10 taps of 52 ps with a 300 MHz IDELAYCTRL reference ≈ 0.52 ns,
-half a sample period; tunable at run time), so the interleaved streams sample
-at 1920 MS/s: 16 samples per 120 MHz cycle, 4 per UI. All clocks are
+phase aligned is met trivially. Both paths pass through an IDELAYE2
+(`VAR_LOAD`, 300 MHz IDELAYCTRL reference, 52 ps taps) so their insertion
+delays match; the `O` path sits at tap 0 and the `OB` path ≈10 taps later
+(≈0.52 ns, half a sample period; any odd multiple of half a sample also works
+and the P4 eye scan may pick one). The interleaved streams then sample at
+1920 MS/s: 16 samples per 120 MHz cycle, 4 per UI. All clocks are
 BUFG-driven (480 MHz is within the -2 BUFG limit of 628 MHz), which removes
 clock-region constraints and the BUFIO/BUFR primitives that nextpnr-xilinx
 lacks. The run-time-loadable delay is also the hook for later software eye
@@ -263,11 +266,16 @@ reset. The PHY therefore produces a UTMI-correct `line_state` in every mode:
   A genuine HS reset (SE0 > 3 ms) is then detected by LUNA exactly as with a
   hardware PHY.
 - **HDMI platform** (set-up 1, no FS levels possible): the platform's
-  `LineStateSynthesiser` replays the reset-and-chirp sequence towards LUNA at
-  power-up (SE0, then the three host K/J chirp pairs with legal durations),
-  after which HS-mode squelch-derived `line_state` applies. The far-end board
-  is told over the link, or simply assumed, to be in HS. This keeps LUNA
-  unmodified and puts the fiction in one small, clearly named platform block.
+  `LineStateSynthesiser` plays the host's half of reset-and-chirp towards
+  LUNA: SE0 for ≥10 ms after power-up (LUNA needs >5 µs to call it a reset),
+  then, **every time LUNA's device chirp ends** (`op_mode == CHIRP` and
+  `tx_valid` falling), the three host K/J pairs of ≥2.5 µs each, after which
+  HS-mode squelch-derived `line_state` applies. Re-arming on the device chirp
+  is essential, not a nicety: after 3 ms of squelch LUNA drops to FS, sees SE0
+  again, re-enters HS detection and chirps once more; a power-up-only replay
+  would leave the link dead after any idle gap or peer reset. The far-end
+  board is assumed to be in HS. This keeps LUNA unmodified and puts the
+  fiction in one small, clearly named platform block.
 
 `op_mode`, `term_select` and `xcvr_select` from LUNA map to pull-up enable, HS
 termination enable and chirp drive on the platforms that have those pins;
@@ -308,9 +316,9 @@ does not):
 - Domains: `usb` (60), `rx_cdr` (120), `rx_io` (480; plus `rx_io90` in the
   two-phase fallback), `tx_io` (240), `idelay_ref` (300), `sync` (= `usb`,
   control/UART).
-- One sampler per bank in the HDMI platform; the BUFG-only design has no
-  clock-region coupling, so a second RX pair costs two more ISERDES and one
-  IDELAY.
+- The BUFG-only design has no clock-region coupling, so a second RX pair
+  costs two more ISERDES and two IDELAYs; if it sits in another bank (RX0 is
+  bank 15, RX1 bank 14) it also needs that bank's own IDELAYCTRL.
 
 CDC rules: `usb`↔`rx_cdr` is a synchronous 2:1 gearbox; control/status to a
 UART/CSR block uses `FFSynchronizer`/`PulseSynchronizer` from
@@ -410,7 +418,7 @@ Hardware (each recorded in `docs/results/`):
 
 ## 7. Toolchain flows
 
-- **Vivado**: Amaranth `Xilinx7SeriesPlatform(toolchain="Vivado")`; build
+- **Vivado**: Amaranth `XilinxPlatform(toolchain="Vivado")`; build
   scripts add `report_utilization -hierarchical` and `report_timing_summary`,
   harvested into `docs/results/`.
 - **Yosys → Vivado**: custom `toolchain_prepare` producing a Yosys

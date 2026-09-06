@@ -148,4 +148,5 @@ Per USB port the PHY wants, on one 3.3 V HR bank:
 | `vbus_det` | 1 | optional, divided VBUS |
 
 Keep all pins of one port in the same bank; two ISERDESE2 on the P/N pair
-need nothing else. A 200 MHz reference for IDELAYCTRL is generated on chip.
+need nothing else. The 300 MHz reference for IDELAYCTRL is generated on
+chip; every bank that hosts a sampler needs its own IDELAYCTRL.
