@@ -47,7 +47,13 @@ def build_applet(name, *, platform, variant, toolchain, build_root="build", do_b
     old = dict(os.environ)
     os.environ.update(env)
     try:
-        products = plat.build(applet_cls(args), name="top", build_dir=str(build_dir), do_build=do_build)
+        applet = applet_cls(args)
+        extra = {}
+        if toolchain == "vivado":
+            xdc = "\n".join(applet.vivado_constraints())
+            if xdc:
+                extra["add_constraints"] = xdc
+        products = plat.build(applet, name="top", build_dir=str(build_dir), do_build=do_build, **extra)
     finally:
         os.environ.clear()
         os.environ.update(old)

@@ -246,6 +246,15 @@ class LinkTest(Applet):
         parser.add_argument("--phase-shift", type=int, default=1, help="internal mode: sample rotation 0..3")
         parser.add_argument("--hdmi-rx", type=int, choices=[0, 1], default=0)
 
+    def vivado_constraints(self):
+        mode = getattr(self.args, "mode", "internal")
+        if not mode.startswith("async-"):
+            return ()
+        # The offset TX PLL shares the 50 MHz input with the MMCM, so Vivado would otherwise time
+        # the AsyncResampler's crossing FIFO between raw_tx_async and raw_cdr as related clocks.
+        return ("set_clock_groups -asynchronous -group [get_clocks raw_tx_async] "
+                "-group [get_clocks -filter {NAME != raw_tx_async}]",)
+
     def elaborate(self, platform):
         m = Module()
         args = self.args

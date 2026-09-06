@@ -28,6 +28,10 @@ class Applet(Elaboratable):
     def __init__(self, args=None):
         self.args = args
 
+    def vivado_constraints(self):
+        """Extra XDC lines for Vivado builds (e.g. clock groups); override if needed."""
+        return ()
+
 
 def register(cls):
     if not cls.name:
