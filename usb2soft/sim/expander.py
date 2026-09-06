@@ -57,7 +57,7 @@ class AsyncResampler(Elaboratable):
         self.out_domain = out_domain
         self.line = Signal(4)          # in_domain
         self.oe = Signal(4)
-        self.samples = Signal(4 * samples_per_ui)   # out_domain
+        self.samples = Signal(4 * samples_per_ui, init=(1 << (4 * samples_per_ui)) - 1)   # out_domain, registered
         self.drops = Signal()          # strobes (out_domain) for statistics
         self.dups = Signal()
         self.overflow = Signal()       # sticky: crossing FIFO overran (must never happen)
@@ -85,28 +85,37 @@ class AsyncResampler(Elaboratable):
         running = Signal()
         pop = Signal()
         consume = Signal(range(W + 2))
+        # Pipelined so that nothing combinational sits between this block and the CDR: the backlog
+        # (one cycle stale) feeds registered drop/dup decisions, and the output word is registered.
         total = Signal(range(self.BUF + E * fifo.depth + 1))
-        m.d.comb += [pop.eq(fifo.r_rdy & (fill <= self.BUF - E)), fifo.r_en.eq(pop),
-                     total.eq(fill + (fifo.r_level * E))]
+        m.d.comb += [pop.eq(fifo.r_rdy & (fill <= self.BUF - E)), fifo.r_en.eq(pop)]
+        out += total.eq(fill + (fifo.r_level * E))
 
         holdoff = Signal(range(self.HOLDOFF))
         armed = holdoff == 0
-        drop = running & armed & (total >= self.TARGET + self.HYST)
-        dup = running & armed & (total <= self.TARGET - self.HYST)
-        with m.If(drop | dup):
+        drop_next = running & armed & (total >= self.TARGET + self.HYST)
+        dup_next = running & armed & (total <= self.TARGET - self.HYST)
+        drop = Signal()
+        dup = Signal()
+        out += [drop.eq(drop_next), dup.eq(dup_next)]
+        with m.If(drop_next | dup_next):
             out += holdoff.eq(self.HOLDOFF - 1)
         with m.Elif(~armed):
             out += holdoff.eq(holdoff - 1)
         with m.If(~running):
-            m.d.comb += [consume.eq(0), self.samples.eq((1 << W) - 1)]
+            m.d.comb += consume.eq(0)
+            out += self.samples.eq((1 << W) - 1)
             with m.If(total >= self.TARGET):
                 out += running.eq(1)
         with m.Elif(drop):
-            m.d.comb += [consume.eq(W + 1), self.samples.eq(buf[1:W + 1])]
+            m.d.comb += consume.eq(W + 1)
+            out += self.samples.eq(buf[1:W + 1])
         with m.Elif(dup):
-            m.d.comb += [consume.eq(W - 1), self.samples.eq(Cat(buf[0], buf[0:W - 1]))]
+            m.d.comb += consume.eq(W - 1)
+            out += self.samples.eq(Cat(buf[0], buf[0:W - 1]))
         with m.Else():
-            m.d.comb += [consume.eq(W), self.samples.eq(buf[0:W])]
+            m.d.comb += consume.eq(W)
+            out += self.samples.eq(buf[0:W])
         appended = Signal(self.BUF + E)
         m.d.comb += appended.eq(buf | Mux(pop, fifo.r_data << fill, 0))
         out += [

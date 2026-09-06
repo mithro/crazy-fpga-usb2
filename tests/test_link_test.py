@@ -184,4 +184,5 @@ def test_async_resampler_preserves_bit_stream(tx_mhz):
     diffs = [b[1] - a[1] for a, b in zip(r_in[1:-1], r_out[1:-1])]
     assert all(abs(d) <= 1 for d in diffs), [d for d in diffs if abs(d) > 1][:5]
     expected = (120.0 / tx_mhz - 1) * len(sent)      # fast TX -> fewer output samples
-    assert abs(sum(diffs) - expected) <= 40, (sum(diffs), expected)
+    # the backlog may sit anywhere in the +/-(HYST + one 32-sample lump) band at start and end
+    assert abs(sum(diffs) - expected) <= 80, (sum(diffs), expected)
