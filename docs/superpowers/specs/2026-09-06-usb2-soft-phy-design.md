@@ -1,7 +1,7 @@
 # USB 2.0 High-Speed soft PHY on Artix-7 SelectIO — design
 
 Date: 2026-09-06
-Status: revision 6 (2026-09-07): P2 (§4.2 vote dead zone, §4.3 120 MHz decoder + event FIFO) and P3 (§4.4 4:1 serialiser with per-bit tristate) as built and measured
+Status: revision 7 (2026-09-07): P2 (§4.2 vote dead zone, §4.3 120 MHz decoder + event FIFO), P3 (§4.4 4:1 serialiser with per-bit tristate) and P5 (§4.5 synthesiser arming, §4.6 built and enumerating on hardware) as built and measured
 Repository: `mithro/crazy-fpga-usb2` (private)
 
 ## 1. Goal
@@ -272,6 +272,12 @@ reset. The PHY therefore produces a UTMI-correct `line_state` in every mode:
   so while `xcvr_select` selects HS and `term_select` is in chirp mode,
   `line_state` is taken from the differential receiver's static level
   (K = 0b10, J = 0b01). Device chirp K is driven through `op_mode = 2`.
+  (Revision 7, from P5: the built `HSLineState` derives activity from *edges*
+  with an 8 UI timeout, so it cannot report a static host chirp level for the
+  2.5 µs LUNA requires; a level-based path for set-ups 2/3 is future work and
+  every P5 platform uses the `LineStateSynthesiser` below. The synthesiser
+  arms only on a K burst ≥ 1 ms because LUNA still answers packets while
+  `op_mode` is 2, and those short `tx_valid` pulses must not restart the replay.)
 - **HS mode**: HS traffic is also below V_IH, so `line_state` is
   squelch-derived as in a real UTMI PHY: SE0 while the CDR reports no
   activity, J/K (from the differential level) while a packet is on the wire.
