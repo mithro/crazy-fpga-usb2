@@ -1,7 +1,7 @@
 # USB 2.0 High-Speed soft PHY on Artix-7 SelectIO — design
 
 Date: 2026-09-06
-Status: revision 5 (2026-09-07): §4.2 vote dead zone and §4.3 120 MHz decoder + event FIFO, as built and measured in P2
+Status: revision 6 (2026-09-07): P2 (§4.2 vote dead zone, §4.3 120 MHz decoder + event FIFO) and P3 (§4.4 4:1 serialiser with per-bit tristate) as built and measured
 Repository: `mithro/crazy-fpga-usb2` (private)
 
 ## 1. Goal
@@ -43,7 +43,7 @@ delivered in order; later ones depend on earlier ones.
 | P0 | Repository bootstrap | GitHub repo, `uv` project, LUNA dependency, CLAUDE.md, build/program/test scaffolding, CI-free but scripted flows |
 | P1 | Hardware bring-up | "hello" bitstream (LEDs + UART banner + board ID) built with Vivado and loaded on a NeTV2 over GPIO JTAG; HDMI link-discovery bitstream that maps which HDMI ports are cross-connected |
 | P2 | RX path in simulation | sampler front-end model, oversampling CDR, word-parallel NRZI/unstuff/framer, byte packer; Python USB-HS wire model; drift/jitter test benches |
-| P3 | TX path in simulation | byte-to-bit encoder (SYNC, stuffing, NRZI, EOP), elastic gearbox, OSERDES driver; loop tests TX→wire→RX |
+| P3 | TX path in simulation | byte-to-bit encoder (SYNC, stuffing, NRZI, EOP) at 4 bits per 120 MHz cycle with per-bit output enable, UTMI byte FIFO; loop tests TX→wire→RX |
 | P4 | HDMI link on hardware | RX+TX on NeTV2 HDMI pairs: BER/ping-pong soak between two boards with independent crystals; measured utilisation |
 | P5 | Virtual UTMI PHY + LUNA | `SoftUTMIPHY` with line-state, chirp, op-modes; LUNA `USBDevice` integration; full-stack simulation with a Python HS host model; hardware device test between two boards |
 | P6 | TX clock discipline | frequency-error estimator from CDR slips + MMCM fine-phase-shift DPLL slaving the local clock tree to the host; sim + hardware |
@@ -109,8 +109,8 @@ recorded as requirements, not designed here.
                                         (4 samples per UI)         (3..5 bits/cycle)   (120 MHz: NRZI, SYNC,   (rx_cdr → usb)
                                                                                         unstuff, EOP, bytes)
 
- UTMI tx_* ──► TxEncoder ──► elastic 8-bit gearbox ──► OSERDESE2 8:1 DDR (240 MHz) ──► OBUFTDS ──► D+/D-
-           (SYNC, stuff, NRZI, EOP)     usb 60 MHz                  tx_io 240 MHz
+ UTMI tx_* ──► byte FIFO ──► PacketEncoder (4 bits + 4 oe / 120 MHz) ──► OSERDESE2 4:1 DDR, T 4:1 (240 MHz) ──► OBUFTDS ──► D+/D-
+           usb 60 MHz              (SYNC, stuff, NRZI, EOP)                          tx_io 240 MHz
 
  D+, D- single-ended ──► LineStateMonitor (usb 60 MHz) ──► UTMI line_state; chirp/reset per UTMI op_mode/term_select
 
@@ -234,22 +234,26 @@ Word-parallel stages, each carrying state across cycles:
 
 ### 4.4 TX path (`usb2soft.tx`)
 
-- **TxEncoder** (usb domain): on `tx_valid` rising, emit the 32-bit SYNC, then
+- **PacketEncoder** (`tx_cdr` 120 MHz domain, 4 bits per cycle): on the first byte, emit the 32-bit SYNC, then
   bytes LSB-first with stuffing (a zero after six ones), NRZI, then the EOP
   byte `01111111` in NRZ (a zero forcing one transition, then seven ones with
   stuffing disabled, so the violation lands byte-aligned regardless of how
   the CRC ended; the 40-bit SOF EOP is host-only). Mirrors
   `TxShifter`/`TxBitstuffer`/`TxNRZIEncoder`, word-parallel.
-- **Elastic gearbox**: a bit accumulator that always hands exactly 8 raw bits
-  per cycle to the serialiser and asserts `tx_ready` only when it can accept
-  another byte; stuffing makes some bytes cost 9 bits, which is exactly when
-  UTMI expects `tx_ready` to drop.
-- **Serialiser**: OSERDESE2 `DDR`, `DATA_WIDTH=8`, `TRISTATE_WIDTH=1`,
-  `DATA_RATE_TQ="BUF"`, CLK = 240 MHz, CLKDIV = 60 MHz, into OBUFTDS.
-  Tristate is byte-granular, which is sufficient because EOP is exactly one
-  byte, but the T path has far less latency than the 8:1 data path, so the
-  fabric delays the T assertion/de-assertion by the measured data-path latency
-  (a simulation test pins the number). Idle = driver off.
+- **Bit queue** (inside `PacketEncoder`): a 44-bit queue preloaded with the
+  SYNC, refilled one stuffed byte (8–10 bits) at a time and drained 4 bits per
+  cycle; `tx_ready` follows the depth-5 byte FIFO in front of it, so it drops
+  exactly when stuffing makes bytes cost 9 bits.
+- **Serialiser** (revision 6, from P3): OSERDESE2 `DDR`, `DATA_WIDTH=4`,
+  `TRISTATE_WIDTH=4`, `DATA_RATE_TQ="DDR"`, CLK = 240 MHz, CLKDIV = 120 MHz,
+  into OBUFTDS. 4:1 is the only OSERDESE2 configuration with a per-bit
+  tristate word (8:1 forces `TRISTATE_WIDTH=1`, byte-granular, which would
+  dribble up to seven bits after the EOP), so the encoder produces 4 line bits
+  plus 4 output-enable bits per 120 MHz cycle and the driver turns off on the
+  exact bit after the EOP; T rides through the same serialiser as the data,
+  so no fabric delay matching is needed. Bytes reach the encoder from the
+  `usb` domain through a shallow async FIFO (depth 5) so `tx_ready` still tracks the
+  line rate. Idle = driver off.
 - `op_mode = 2` (no NRZI/no stuffing, used for chirp) bypasses the encoder and
   drives the level given by `tx_data[0]` while `tx_valid` (0 → K, as LUNA's
   reset sequencer expects).
@@ -326,7 +330,8 @@ does not):
   VCO 600–1200 MHz).
 - All MMCM outputs have `USE_FINE_PS=TRUE` so P6 can slew the entire clock
   tree together (see 4.8). Resets are `~locked` through `ResetSynchronizer`.
-- Domains: `usb` (60), `rx_cdr` (120), `rx_io` (480), `tx_io` (240),
+- Domains: `usb` (60), `rx_cdr` and `tx_cdr` (both the MMCM's 120 MHz output; the
+  encoder and the OSERDES CLKDIV run in `tx_cdr`), `rx_io` (480), `tx_io` (240),
   `idelay_ref` (300), `sync` (= `usb`, control/UART); the two-phase fallback
   adds `rx_io90` (480 @ 90°) and `rx_cdr90` (120 @ 22.5°).
 - The BUFG-only design has no clock-region coupling, so a second RX pair
@@ -383,7 +388,7 @@ crazy-fpga-usb2/
     applets/                hello_netv2, hdmi_discovery, hdmi_loopback_ber, luna_device, ...
     platforms/              netv2_hdmi.py, netv2_hax_usb.py, arty_pmod_usb.py (Amaranth platforms with clock generators)
     rx/  sampler.py cdr.py decoder.py
-    tx/  encoder.py gearbox.py serializer.py
+    tx/  encoder.py bridge.py   (serialiser wrapper lives in io/serializer.py)
     phy/ utmi.py linestate.py
     clock/ plan.py mmcm.py discipline.py
     luna/ device.py
