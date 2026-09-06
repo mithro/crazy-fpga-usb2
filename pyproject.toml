@@ -1,0 +1,36 @@
+[project]
+name = "usb2soft"
+version = "0.0.0"
+description = "USB 2.0 high-speed signalling on Xilinx 7-series SelectIO pins, as a virtual UTMI PHY for LUNA"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = [
+    "amaranth>=0.5.9,<0.6",
+    # Greg Davill's LUNA fork (a28cf60: upstream main + Amaranth 0.5 Record/Encoder backport)
+    # via the mithro/luna fork branch crazy-fpga-usb2, which only adds a tag_filter so the
+    # package version is PEP 440 valid (Greg's hw-r0.x tags otherwise break the build).
+    "luna-usb @ git+https://github.com/mithro/luna.git@dea5270d53f9f60dba813bb97f384069295e9ed4",
+    "pyserial>=3.5",
+    "pyvcd>=0.4",
+]
+
+[project.scripts]
+usb2soft = "usb2soft.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["usb2soft*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-xdist>=3",
+]
