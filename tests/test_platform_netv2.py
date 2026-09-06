@@ -64,3 +64,13 @@ def test_registry():
     assert plat.device == "xc7a100t"
     with pytest.raises(KeyError):
         get_platform("nonesuch")
+
+
+def test_vivado_constraints_include_config_voltage_and_compression(tmp_path):
+    from usb2soft.platforms.netv2 import NeTV2Platform
+    plat = NeTV2Platform(variant="a7-35")
+    plan = plat.build(_Blink(), name="t", build_dir=str(tmp_path), do_build=False)
+    xdc = plan.files["t.xdc"]
+    assert "set_property CFGBVS VCCO [current_design]" in xdc
+    assert "set_property CONFIG_VOLTAGE 3.3 [current_design]" in xdc
+    assert "BITSTREAM.GENERAL.COMPRESS TRUE" in plan.files["t.tcl"]

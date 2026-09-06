@@ -88,3 +88,17 @@ class NeTV2Platform(XilinxPlatform):
         self.variant = variant
         self.device = VARIANTS[variant]
         super().__init__(toolchain=toolchain)
+
+    def toolchain_prepare(self, fragment, name, **kwargs):
+        overrides = {
+            # Bank 0 is powered from 3.3 V on the NeTV2; silences DRC CFGBVS-1.
+            "add_constraints": "\n".join([
+                "set_property CFGBVS VCCO [current_design]",
+                "set_property CONFIG_VOLTAGE 3.3 [current_design]",
+            ]),
+            # Compressed bitstreams load several times faster over bit-banged GPIO JTAG.
+            "script_before_bitstream":
+                "set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]",
+        }
+        overrides.update(kwargs)
+        return super().toolchain_prepare(fragment, name, **overrides)
