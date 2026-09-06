@@ -1,0 +1,20 @@
+# Python / uv
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+
+# Build outputs and reports that are regenerated
+build/
+*.bit
+*.bin
+*.vcd
+*.fst
+*.jou
+*.log
+.Xil/
+
+# Scratch
+tmp/
+.worktrees/
