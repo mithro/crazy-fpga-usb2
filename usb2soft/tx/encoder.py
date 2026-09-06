@@ -18,7 +18,7 @@ __all__ = ["PacketEncoder"]
 SYNC_BITS = 32
 STUFF_RUN = 6
 EOP_DATA = 0b11111110          # bit 0 first: 0 then seven 1s
-QUEUE_BITS = 24                # >= 14 (refill threshold) + 10 (worst-case stuffed byte)
+QUEUE_BITS = 44                # 32 (preloaded SYNC) + 10 (worst-case stuffed byte) + slack
 REFILL_AT = QUEUE_BITS - 10
 
 
@@ -43,7 +43,6 @@ class PacketEncoder(Elaboratable):
         fill = Signal(range(QUEUE_BITS + 1))
         ones_run = Signal(range(STUFF_RUN + 1))
         level = Signal(init=1)              # NRZI level after the last emitted bit
-        sync_left = Signal(range(SYNC_BITS // 4 + 1))
         ending = Signal()                   # EOP has been appended; drain then idle
 
         # --- stuff one byte given the carried ones run: up to 10 bits ------------------------
@@ -80,21 +79,17 @@ class PacketEncoder(Elaboratable):
         m.d.comb += drain.eq(Mux(fill >= 4, 4, fill))
 
         with m.FSM(domain=self.domain) as fsm:
-            m.d.comb += self.busy.eq(~fsm.ongoing("IDLE"))
+            # busy covers the registered output too: it falls with the last driven word.
+            m.d.comb += self.busy.eq(~fsm.ongoing("IDLE") | self.oe.any())
             with m.State("IDLE"):
                 sync += [level.eq(1), fill.eq(0), queue.eq(0), ones_run.eq(0), ending.eq(0)]
                 with m.If(self.byte_valid & ~self.byte_end):
-                    sync += sync_left.eq(SYNC_BITS // 4)
-                    m.next = "SYNC"
+                    # Preload the whole SYNC (31 zeros then a one) so data refills start with
+                    # 32 bits of margin; the SYNC's final one seeds the stuffing run.
+                    sync += [queue.eq(1 << (SYNC_BITS - 1)), fill.eq(SYNC_BITS), ones_run.eq(1)]
+                    m.next = "DATA"
                 with m.Elif(self.byte_valid & self.byte_end):
                     m.d.comb += self.byte_ready.eq(1)      # stray end marker: swallow it
-            with m.State("SYNC"):
-                # 31 zeros then a one; emitted straight from the FSM, four bits per cycle.
-                m.d.comb += [add_n.eq(4), add_bits.eq(Mux(sync_left == 1, 0b1000, 0))]
-                sync += sync_left.eq(sync_left - 1)
-                with m.If(sync_left == 1):
-                    sync += ones_run.eq(1)                   # the SYNC's final one counts
-                    m.next = "DATA"
             with m.State("DATA"):
                 with m.If(~ending & (fill <= REFILL_AT)):
                     with m.If(self.byte_valid & ~self.byte_end):
@@ -102,8 +97,11 @@ class PacketEncoder(Elaboratable):
                         sync += ones_run.eq(run_after)
                     with m.Elif(self.byte_valid & self.byte_end):
                         m.d.comb += take_end.eq(1)
-                    with m.Elif(fill < 4):
-                        # starved: close the packet as if tx_valid had dropped
+                    with m.Elif(fill < 8):
+                        # Starved: close the packet as if tx_valid had dropped. Closing while a
+                        # full word is still queued keeps the output enable contiguous through
+                        # the EOP (closing at fill < 4 would leave an oe hole before the EOP).
+                        # Source bubble tolerance is therefore about two cycles per byte.
                         m.d.comb += take_end.eq(1)
                         sync += self.underrun.eq(1)
                 with m.If(take_end):
@@ -116,7 +114,7 @@ class PacketEncoder(Elaboratable):
         # Queue update: append add_n bits at position fill, then drop the drained bits.
         appended = Signal(QUEUE_BITS + 10)
         m.d.comb += appended.eq(queue | (add_bits << fill))
-        with m.If(fsm.ongoing("SYNC") | fsm.ongoing("DATA")):
+        with m.If(fsm.ongoing("DATA")):
             sync += [queue.eq((appended >> drain)[:QUEUE_BITS]), fill.eq(fill + add_n - drain)]
 
         # --- NRZI output of up to four queued bits ------------------------------------------
@@ -130,7 +128,7 @@ class PacketEncoder(Elaboratable):
             line_bits.append(Mux(valid, nxt, 1))
             oe_bits.append(valid)
             lvl = nxt
-        with m.If(fsm.ongoing("SYNC") | fsm.ongoing("DATA")):
+        with m.If(fsm.ongoing("DATA")):
             sync += [self.line.eq(Cat(*line_bits)), self.oe.eq(Cat(*oe_bits)), level.eq(lvl)]
         with m.Else():
             sync += [self.line.eq(0b1111), self.oe.eq(0)]

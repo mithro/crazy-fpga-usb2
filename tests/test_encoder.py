@@ -37,6 +37,7 @@ def drive(payloads, *, gap_cycles=8, stall_every=None):
         ctx.set(dut.byte_valid, 0)
         for _ in range(12):
             await ctx.tick()
+        flags["underrun"] = ctx.get(dut.underrun)
 
     async def sampler(ctx):
         while True:
@@ -46,12 +47,13 @@ def drive(payloads, *, gap_cycles=8, stall_every=None):
                 oe.append((o >> i) & 1)
             await ctx.tick()
 
+    flags = {}
     sim = Simulator(dut)
     sim.add_clock(1 / 120e6)
     sim.add_testbench(feeder)
     sim.add_testbench(sampler, background=True)
     sim.run()
-    return dut, line, oe, ready_at
+    return flags, line, oe, ready_at
 
 
 def driven_segments(line, oe):
@@ -71,10 +73,11 @@ def driven_segments(line, oe):
 @pytest.mark.parametrize("payload", [b"\x5a", bytes(range(16)), b"\xff" * 40,
                                      bytes(random.Random(1).randrange(256) for _ in range(300))])
 def test_packet_bits_match_model_exactly(payload):
-    _, line, oe, _ = drive([payload])
+    flags, line, oe, _ = drive([payload])
     segs = driven_segments(line, oe)
     assert len(segs) == 1
     assert segs[0] == usbhs.packet_line_bits(payload, sync_bits=32)
+    assert flags["underrun"] == 0
 
 
 def test_two_packets_and_reference_decode():
@@ -93,13 +96,60 @@ def test_oe_is_low_between_packets_and_bit_exact_at_eop():
     assert oe[first + len(expected)] == 0          # driver off on the very next bit
 
 
-def test_stalled_source_ends_packet_and_flags_underrun():
+def test_source_every_other_cycle_sustains_line_rate():
+    # 8 bits every two cycles is exactly the 4 bits/cycle line rate: no truncation, no underrun
     payload = bytes(range(64))
-    dut, line, oe, _ = drive([payload], stall_every=2)     # source valid only every other cycle
-    # every other cycle cannot sustain 4 bits/cycle: the encoder closes the packet early
+    flags, line, oe, _ = drive([payload], stall_every=2)
     segs = driven_segments(line, oe)
+    assert len(segs) == 1 and segs[0] == usbhs.packet_line_bits(payload)
+    assert flags["underrun"] == 0
+
+
+def test_starved_source_closes_packet_contiguously_and_flags_underrun():
+    """The source stops after 16 bytes without an end marker: one contiguous oe segment, a
+    well-formed strict prefix of the payload, and the sticky underrun flag."""
+    payload = bytes(range(64))
+    dut = PacketEncoder()
+    line, oe = [], []
+
+    async def feeder(ctx):
+        for b in payload[:16]:
+            ctx.set(dut.byte_valid, 1)
+            ctx.set(dut.byte, b)
+            while not ctx.get(dut.byte_ready):
+                await ctx.tick()
+            await ctx.tick()
+        ctx.set(dut.byte_valid, 0)
+        for _ in range(60):
+            await ctx.tick()
+        flags["underrun"] = ctx.get(dut.underrun)
+
+    async def sampler(ctx):
+        while True:
+            l, o = ctx.get(dut.line), ctx.get(dut.oe)
+            for i in range(4):
+                line.append((l >> i) & 1)
+                oe.append((o >> i) & 1)
+            await ctx.tick()
+
+    flags = {}
+    sim = Simulator(dut)
+    sim.add_clock(1 / 120e6)
+    sim.add_testbench(feeder)
+    sim.add_testbench(sampler, background=True)
+    sim.run()
+    assert flags["underrun"] == 1
+    segs = driven_segments(line, oe)
+    assert len(segs) == 1                                   # no oe hole before the EOP
     decoded = usbhs.reference_decode([1] * 8 + segs[0] + [1] * 8)
-    assert decoded and payload.startswith(decoded[0])       # a well-formed prefix of the payload
+    assert decoded and 0 < len(decoded[0]) < len(payload) and payload.startswith(decoded[0])
+
+
+@pytest.mark.parametrize("payload", [b"\x00\xfc", b"\x7f\x01", b"\xff\xff", b"\xfe\xff\x01"])
+def test_stuffing_boundary_cases(payload):
+    flags, line, oe, _ = drive([payload])
+    assert driven_segments(line, oe) == [usbhs.packet_line_bits(payload)]
+    assert flags["underrun"] == 0
 
 
 def test_underrun_flag():

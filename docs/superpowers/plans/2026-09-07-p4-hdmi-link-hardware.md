@@ -56,7 +56,7 @@ Tests: expander bit-exactness vs `usbhs` sampling of the same bits; `LinkTestCor
 
 ### Task 5: Applet, Vivado build, utilisation
 
-`link-test` applet (`usb2soft/applets/link_test.py`): clocks, IDELAYCTRL, LinkTestCore, UART console, LEDs (lock, activity, error sticky). Build both modes for a7-100 (rpi5-netv2) and a7-35. Record from `top_utilization_hierarchical_place.rpt` the LUT/FF/carry counts of `core/tx`, `core/rx` (cdr, decoder, bridge), `sampler`, `serializer` separately, and WNS per clock (480/240/120/60). Expect the PHY datapath (tx+rx) within the spec's ≤700 LUT / ≤600 FF budget; if not, note the gap for P8. Timing must close at 480/240/120 MHz; if the CDR fails at 120 MHz, add a pipeline register between vote counting and the pick mux (the plan for that is one extra cycle of latency).
+`link-test` applet (`usb2soft/applets/link_test.py`): clocks, IDELAYCTRL, LinkTestCore, UART console, LEDs (lock, activity, error sticky). Build both modes for a7-100 (rpi5-netv2) and a7-35. Record from `top_utilization_hierarchical_place.rpt` the LUT/FF/carry counts of `core/tx`, `core/rx` (cdr, decoder, bridge), `sampler`, `serializer` separately, and WNS per clock (480/240/120/60). Expect the PHY datapath (tx+rx) within the spec's ≤700 LUT / ≤600 FF budget; if not, note the gap for P8. Timing must close at 480/240/120 MHz. Check the encoder's stuff-and-compact chain (byte → 8-stage run chain → 16-stage prefix compaction → 44-bit barrel shift) and the CDR→decoder chain in the timing report; if either fails at 120 MHz, add a pipeline register between vote counting and the pick mux (the plan for that is one extra cycle of latency).
 
 ### Task 6: Hardware
 

@@ -27,9 +27,14 @@ its response.
 
 | Segment | measured |
 |---|---|
-| last received line bit → `rx_active` low | 83 ns (40 bit times) |
-| `tx_valid` asserted → first driven bit | 58 ns (28 bit times) |
-| PHY-only total | 142 ns (68 bit times), leaving 124 for the MAC |
+| last received line bit → `rx_active` low | 83 ns (40 bit times; reference is the first idle *word*, up to 4 bit times after the true last bit) |
+| `tx_valid` asserted → first driven bit | 50 ns (24 bit times) |
+| gateware total (no I/O primitives) | 133 ns (64 bit times) |
+
+**Caveat:** this excludes the I/O primitives, which the simulation does not model:
+IBUFDS + IDELAY + ISERDESE2 (about 2 CLKDIV cycles) on the way in and OSERDESE2 + OBUFTDS
+(about 3 CLK cycles) on the way out, roughly 20–25 bit times more. Budget for the MAC is
+therefore about 100 bit times, not 124.
 
 The two `AsyncFIFOBuffered` crossings account for most of it; a P8 candidate is to run the
 decoder/encoder in the `usb` domain's phase-related 120 MHz clock and replace the FIFOs by
@@ -44,6 +49,26 @@ forces `TRISTATE_WIDTH=1` (byte-granular), which would dribble up to seven extra
 EOP. The encoder therefore produces 4 bits per 120 MHz cycle, the same word width as the RX
 decoder, and the tristate bits ride through the same serialiser as the data so no fabric delay
 matching is needed.
+
+## Deviations from the plan
+
+- The empty-payload case was dropped from the bit-exact tests: USB has no empty packets and a
+  lone end marker is swallowed by the encoder.
+- The round trip covers 1–512 bytes (not 0–512); the plan's "tx_valid falling → last oe bit"
+  latency was not measured separately.
+- The byte FIFO is `AsyncFIFOBuffered(depth=4)`, which Amaranth rounds to 5 entries.
+
+## Review fixes
+
+- The starvation rule closed the packet with fewer than four bits queued, which put an
+  output-enable hole before the EOP (a detached EOP burst on a real bus). It now closes at
+  `fill < 8`, and the whole 32-bit SYNC is preloaded into a 44-bit queue so data refills start
+  with 32 bits of margin (otherwise a source that withdraws `valid` on alternate cycles could
+  livelock at data entry). `test_starved_source_closes_packet_contiguously_and_flags_underrun`
+  asserts one contiguous segment, a strict payload prefix and `underrun == 1`; the bit-exact
+  tests assert `underrun == 0`; stuffing-boundary cases `00 FC`, `7F 01`, `FF FF`, `FE FF 01`
+  are pinned.
+- `busy` now also covers the registered output word.
 
 ## Bugs found by the tests
 
