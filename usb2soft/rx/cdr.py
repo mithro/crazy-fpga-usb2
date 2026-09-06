@@ -75,7 +75,9 @@ class OversamplingCDR(Elaboratable):
         thr = Signal(signed(8))
         m.d.comb += thr.eq(Mux(self.in_packet, T, 1))
         acc_next = Signal(signed(8))
-        m.d.comb += acc_next.eq(acc + up.as_signed() - down.as_signed())
+        # up/down are unsigned popcounts (at most W/S each, since ``ideal`` cycles through every
+        # residue); amaranth widens them correctly when mixed with the signed accumulator.
+        m.d.comb += acc_next.eq(acc + up - down)
         step_up = Signal()
         step_down = Signal()
         m.d.comb += [

@@ -132,6 +132,30 @@ def test_activity_flag_follows_edges():
     assert seen == [0, 1, 0]
 
 
+@pytest.mark.parametrize("S,W", [(4, 16), (3, 12)])
+def test_all_edges_word_does_not_slip(S, W):
+    """A word with an edge at every sample (noise) gives equal up/down votes: no phase steps.
+    Regression: a signed reinterpretation of the popcount (16 read as -16) stepped every cycle."""
+    dut = OversamplingCDR(samples_per_ui=S, samples_per_word=W)
+    slips = 0
+    phases = set()
+
+    async def tb(ctx):
+        nonlocal slips
+        alt = sum(1 << i for i in range(0, W, 2))
+        for _ in range(40):
+            ctx.set(dut.samples, alt)
+            await ctx.tick()
+            slips += ctx.get(dut.slip_up) + ctx.get(dut.slip_down)
+            phases.add(ctx.get(dut.phase))
+
+    sim = Simulator(dut)
+    sim.add_clock(1 / 120e6)
+    sim.add_testbench(tb)
+    sim.run()
+    assert slips == 0 and len(phases) <= 2
+
+
 def test_noisy_idle_then_packet_locks():
     payload = bytes(random.Random(3).randrange(256) for _ in range(64))
     noise = usbhs.idle_noise(n_ui=200, samples_per_ui=4, toggle_prob=0.25, seed=5)
