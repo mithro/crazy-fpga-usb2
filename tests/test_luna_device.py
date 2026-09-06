@@ -70,3 +70,91 @@ def test_reset_walk_reaches_high_speed_and_recovers_after_idle(monkeypatch):
     assert speeds[0] == USBSpeed.FULL and speeds[-1] == USBSpeed.HIGH
     assert speeds.count(USBSpeed.HIGH) >= 2, speeds
     assert dut.phy.synthesiser is not None
+
+
+from usb2soft.sim.host import HSHostModel, HostError, GET_DESCRIPTOR_DEVICE, SET_ADDRESS, HS_DEVICE_RESPONSE_BITS
+from usb2soft.sim.usb_crc import PID, token
+
+
+async def _walk_to_high_speed(ctx, dut, host):
+    """Power-up SE0 -> chirp -> K/J -> HS (scaled), keeping SOFs flowing at transaction gaps."""
+    for _ in range(6):
+        for _ in range(500):
+            await ctx.tick("usb")
+        await host.send_sof(ctx)
+    assert ctx.get(dut.device.speed) == USBSpeed.HIGH and ctx.get(dut.phy.op_mode) == 0
+
+
+@pytest.mark.parametrize("ppm", [0, 500, -500])
+def test_enumeration_over_the_soft_phy(monkeypatch, ppm):
+    scale_sequencer(monkeypatch)
+    dut = LunaDeviceHarness()
+    host = HSHostModel(dut.phy, ppm=ppm)
+    result = {}
+    expected_dev = bytes(dut.descriptors.get_descriptor_bytes(1))
+
+    async def tb(ctx):
+        await _walk_to_high_speed(ctx, dut, host)
+        desc = await host.control_transfer(ctx, 0, GET_DESCRIPTOR_DEVICE(64), read_length=64)
+        assert desc == expected_dev, (desc.hex(), expected_dev.hex())
+        await host.send_sof(ctx)
+        await host.control_transfer(ctx, 0, SET_ADDRESS(5))
+        await host.send_sof(ctx)
+        desc5 = await host.control_transfer(ctx, 5, GET_DESCRIPTOR_DEVICE(18), read_length=18)
+        assert desc5 == expected_dev
+        # the old address no longer answers
+        await host.send(ctx, token(PID.IN, 0, 0))
+        assert await host.receive(ctx) is None
+        result["latencies"] = list(host.latencies)
+        result["speed"] = ctx.get(dut.device.speed)
+
+    sim = make_sim(dut)
+    sim.add_testbench(tb)
+    sim.add_testbench(host.collector, background=True)
+    sim.run()
+    lat = result["latencies"]
+    assert lat and max(lat) <= HS_DEVICE_RESPONSE_BITS, lat
+    assert result["speed"] == USBSpeed.HIGH
+    result["max_latency_bits"] = max(lat)
+    print(f"\nppm={ppm}: {len(lat)} responses, latency min/max {min(lat)}/{max(lat)} bit times")
+
+
+def test_plain_usbdevice_stays_full_speed(monkeypatch):
+    """Guards the SoftPHYUSBDevice rationale: LUNA's USBDevice on a bare UTMI object never
+    attempts high-speed detection (always_fs=True)."""
+    from luna.gateware.usb.usb2.device import USBDevice
+    from usb2soft.luna import standard_descriptors
+    from tests.luna_harness import SYNTH_SCALED
+    from usb2soft.phy import SoftUTMIPHY, LineStateSynthesiser
+    from amaranth import Module, Elaboratable, ClockDomain
+
+    scale_sequencer(monkeypatch)
+
+    class Plain(Elaboratable):
+        def __init__(self):
+            self.phy = SoftUTMIPHY(synthesiser=LineStateSynthesiser(**SYNTH_SCALED))
+            self.device = USBDevice(bus=self.phy)
+            self.device.add_standard_control_endpoint(standard_descriptors())
+
+        def elaborate(self, platform):
+            m = Module()
+            for d in ("usb", "rx_cdr", "tx_cdr"):
+                m.domains += ClockDomain(d)
+            m.submodules.phy = self.phy
+            m.submodules.device = self.device
+            m.d.comb += self.device.connect.eq(1)
+            return m
+
+    dut = Plain()
+    seen = set()
+
+    async def tb(ctx):
+        for _ in range(1500):
+            seen.add((ctx.get(dut.phy.op_mode), ctx.get(dut.device.speed)))
+            await ctx.tick("usb")
+
+    sim = make_sim(dut)
+    sim.add_testbench(tb)
+    sim.run()
+    assert all(op == 0 for op, _ in seen), seen           # never chirps
+    assert all(sp == USBSpeed.FULL for _, sp in seen)
