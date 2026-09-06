@@ -1,7 +1,12 @@
-"""Internal-loopback "wire": expand the encoder's 4 line bits per cycle into the 16 samples per
-cycle the CDR expects (each bit x4, idle = J), with a fixed sub-sample phase rotation so the
-CDR's phase pointer is exercised at every offset. Synthesisable; runs in the shared 120 MHz
-domain of the link-test applet."""
+"""Internal-loopback "wires" for the link-test applet (synthesisable).
+
+``SampleExpander``: expand the encoder's 4 line bits per cycle into the 16 samples per cycle the
+CDR expects (each bit x4, idle = J), with a fixed sub-sample phase rotation so the CDR's phase
+pointer is exercised at every offset; runs in the shared 120 MHz domain.
+
+``AsyncResampler``: the same, but from a transmit clock with a real frequency offset (the P4 plan's
+"slip_period" expander was replaced by this: a second PLL plus single-sample drop/repeat gives the
+CDR a genuine ±4000 ppm source instead of a synthetic periodic slip)."""
 from amaranth import Elaboratable, Module, Signal, Cat, Mux
 
 __all__ = ["SampleExpander", "AsyncResampler"]

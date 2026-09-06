@@ -101,9 +101,13 @@ class NeTV2PhyClocks(Elaboratable):
             self.cd["usb"].clk.eq(mmcm.clocks["usb"]),
             self.cd["sync"].clk.eq(mmcm.clocks["usb"]),
             self.cd["idelay_ref"].clk.eq(pll.clocks["idelay_ref"]),
-            self.locked.eq(pll.locked & mmcm.locked),
         ]
-        locked_all = self.locked
+        if not self.async_tx:
+            m.d.comb += self.locked.eq(pll.locked & mmcm.locked)
+        # Each domain is reset by its own generator's LOCKED pin alone (no LUT on an async reset,
+        # Vivado LUTAR-1): the MMCM is held in reset until the PLL locks, so mmcm.locked implies
+        # pll.locked, and the optional second PLL is chained off the MMCM in the same way.
+        resets = {name: ~(pll.locked if name == "idelay_ref" else mmcm.locked) for name in self.cd}
         if self.async_tx:
             from .params import ClockSolution, OutputSetting
             cfg = self.ASYNC_TX[self.async_tx]
@@ -111,10 +115,10 @@ class NeTV2PhyClocks(Elaboratable):
             sol2 = ClockSolution(kind="pll", fin=50e6, divclk=cfg["divclk"], mult=cfg["mult"], vco=vco,
                                  outputs={"tx_async": OutputSetting(frequency=vco / cfg["divide"],
                                                                     divide=cfg["divide"])})
-            m.submodules.pll2 = pll2 = PLLE2(sol2, clkin=clk50_buf.i)
+            m.submodules.pll2 = pll2 = PLLE2(sol2, clkin=clk50_buf.i, reset=~mmcm.locked)
             m.d.comb += self.cd["tx_async"].clk.eq(pll2.clocks["tx_async"])
-            locked_all = self.locked & pll2.locked
-        for name in self.cd:
-            arst = ~pll.locked if name == "idelay_ref" else ~locked_all
+            m.d.comb += self.locked.eq(pll.locked & mmcm.locked & pll2.locked)
+            resets["tx_async"] = ~pll2.locked
+        for name, arst in resets.items():
             m.submodules[f"rst_{name}"] = ResetSynchronizer(arst, domain=name)
         return m

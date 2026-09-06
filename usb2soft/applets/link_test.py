@@ -2,12 +2,16 @@
 and UART counters. This is the first bitstream that runs the P2/P3 datapath in silicon.
 
 Packet format (UTMI bytes): seq_lo, seq_hi, then N payload bytes from a 16-bit LFSR seeded with
-the sequence number, then a 16-bit Fletcher checksum (over everything before it). Lengths cycle
-through 8, 64 and 512 bytes of payload.
+the sequence number, then two mod-256 running-sum bytes (a Fletcher-style check, not the USB
+CRC16: cheaper, and adequate for a link test whose bad/error counters are corroborated by the
+sequence-gap counter). Lengths cycle through 8, 64 and 512 bytes of payload.
+
+``LinkTestCore.inject`` XORs a mask into the internal sample stream for fault-injection tests in
+simulation; it is constant 0 in the applet and is optimised away.
 """
 from amaranth import Elaboratable, Module, Signal, Cat, Const, Mux, Array
 from amaranth.lib import io
-from amaranth.lib.cdc import PulseSynchronizer, FFSynchronizer
+from amaranth.lib.cdc import FFSynchronizer
 
 from . import Applet, register
 from ..clock.netv2 import NeTV2PhyClocks
@@ -186,13 +190,16 @@ class LinkTestCore(Elaboratable):
         self.line = self.tx.line
         self.oe = self.tx.oe
         self.inject = Signal(4 * samples_per_ui)   # XOR mask on the internal samples (fault injection)
-        self.slips_up = Signal(32)
+        self.slips_up = Signal(32)      # usb-domain copies of CDR-domain counters
         self.slips_down = Signal(32)
+        self.overflow = Signal()        # async modes: resampler crossing FIFO overran (sticky)
         self.uart_tx = Signal(init=1)
+        # Report line: L <tx> <good> <bad> <err> <gaps> <slip_up> <slip_down> <phase> <ovf>
         self.console = Console([b"L ", Hex(self.gen.packets), b" ", Hex(self.chk.good), b" ",
                                 Hex(self.chk.bad), b" ", Hex(self.chk.errors), b" ", Hex(self.chk.gaps),
                                 b" ", Hex(self.slips_up), b" ", Hex(self.slips_down), b" ",
-                                Hex(self.rx.cdr.phase), b"\r\n"], divisor=console_divisor)
+                                Hex(self.rx.cdr.phase), b" ", Hex(self.overflow), b"\r\n"],
+                               divisor=console_divisor)
 
     def elaborate(self, platform):
         m = Module()
@@ -213,13 +220,17 @@ class LinkTestCore(Elaboratable):
             m.submodules.expander = self.expander
             m.d.comb += [self.expander.line.eq(self.tx.line), self.expander.oe.eq(self.tx.oe),
                          self.rx.samples.eq(self.expander.samples ^ self.inject)]
-        # Slip strobes from the CDR domain into usb-domain counters.
+        # Slips are counted in the CDR domain (they can be back-to-back during acquisition, which a
+        # pulse synchroniser would merge) and copied into the usb domain once per usb cycle; the
+        # two clocks come from the same MMCM (2:1, phase aligned), so this is a timed path, like
+        # the direct read of ``cdr.phase`` above.
         for name, src, cnt in (("up", self.rx.cdr.slip_up, self.slips_up), ("dn", self.rx.cdr.slip_down, self.slips_down)):
-            ps = PulseSynchronizer(self.cdr_domain, self.usb_domain)
-            m.submodules[f"ps_{name}"] = ps
-            m.d.comb += ps.i.eq(src)
-            with m.If(ps.o):
-                usb += cnt.eq(cnt + 1)
+            raw = Signal(32, name=f"slips_{name}_cdr")
+            with m.If(src):
+                m.d[self.cdr_domain] += raw.eq(raw + 1)
+            usb += cnt.eq(raw)
+        if self.async_tx:
+            m.submodules.ovf_sync = FFSynchronizer(self.expander.overflow, self.overflow, o_domain=self.usb_domain)
         timer = Signal(range(self.report_period))
         with m.If(timer == self.report_period - 1):
             usb += timer.eq(0)
@@ -266,12 +277,13 @@ class LinkTest(Applet):
                             phase_shift=getattr(args, "phase_shift", 1))
         m.submodules.core = core
         if mode == "hdmi":
-            m.submodules.idc = IdelayCtrl()
+            m.submodules.idc = idc = IdelayCtrl()
             rx = platform.request("hdmi_in", getattr(args, "hdmi_rx", 0), dir="-")
             tx = platform.request("hdmi_out", 0, dir="-")
             m.submodules.sampler = sampler = Sampler(rx.d0)
             m.submodules.ser = ser = Serializer(tx.d0)
-            m.d.comb += [core.samples.eq(sampler.samples), ser.line.eq(core.line), ser.oe.eq(core.oe)]
+            m.d.comb += [sampler.rdy.eq(idc.rdy), core.samples.eq(sampler.samples),
+                         ser.line.eq(core.line), ser.oe.eq(core.oe)]
         uart = platform.request("uart", 0, dir="-")
         m.submodules.uart_tx = tx_buf = io.Buffer("o", uart.tx)
         m.d.comb += tx_buf.o.eq(core.uart_tx)

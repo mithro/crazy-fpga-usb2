@@ -67,3 +67,18 @@ Tests: expander bit-exactness vs `usbhs` sampling of the same bits; `LinkTestCor
 ### Task 7: Review and PR
 
 Code review, fixes, PR "P4: PHY front-end, link test applet, internal loopback on hardware".
+
+
+## Deviations recorded after execution (2026-09-07)
+
+- The packet check is a two-byte mod-256 running sum, not USB CRC16 (cheaper; the sequence-gap
+  counter corroborates it).
+- The planned `slip_period` synthetic-slip expander was replaced by a second PLLE2 (`tx_async`,
+  +3788 / −4630 ppm) and `AsyncResampler`, giving the CDR a genuine frequency offset in hardware.
+- Only XC7A100T (rpi5-netv2) bitstreams were built and run so far; the XC7A35T build is fabric
+  identical (same LUT counts) and will be exercised when rpi3-netv2 is released.
+- Captures were 12 s (internal) and 30 s (async modes), not 30 s throughout.
+- Review fixes applied: IDELAY `LD` pulse after IDELAYCTRL ready (`IdelayLoader`), explicit
+  `IS_IDATAIN_INVERTED` / `IS_CLKB_INVERTED`, one LOCKED per reset synchroniser, CDR-domain slip
+  counters, resampler pipelining and `set_clock_groups` for `raw_tx_async`, overflow field in the
+  report line.

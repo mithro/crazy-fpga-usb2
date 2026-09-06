@@ -83,8 +83,9 @@ def test_checker_flags_corruption():
         ctx.set(dut.core.inject, 0)
         for _ in range(6000):
             await ctx.tick("usb")
-        result["bad"] = ctx.get(dut.core.chk.bad)
-        result["good"] = ctx.get(dut.core.chk.good)
+        for name in ("good", "bad", "errors", "gaps"):
+            result[name] = ctx.get(getattr(dut.core.chk, name))
+        result["tx"] = ctx.get(dut.core.gen.packets)
 
     sim = Simulator(dut)
     sim.add_clock(1 / 60e6, domain="usb")
@@ -92,8 +93,12 @@ def test_checker_flags_corruption():
     sim.add_clock(1 / 120e6, domain="tx_cdr")
     sim.add_testbench(tb)
     sim.run()
+    # Deterministic: the inverted word lands inside one packet's payload, which the decoder
+    # flags (stuffing violation -> error event) and the checker counts as one bad packet and one
+    # sequence gap; every other packet is good.
     assert result["good"] > 0
-    assert result["bad"] >= 1
+    assert result["bad"] == 1 and result["errors"] == 1 and result["gaps"] == 1, result
+    assert result["good"] + result["bad"] >= result["tx"] - 1, result
 
 
 @pytest.mark.parametrize("tx_mhz,ppm", [(120.4545, 3788), (119.4444, -4630)])
@@ -101,31 +106,45 @@ def test_async_loopback_tracks_offset(tx_mhz, ppm):
     """TX path clocked at +3788 / -4630 ppm against the CDR: packets survive and the CDR slips in
     the expected direction at the expected rate (one sample per 1/(4*ppm) UI)."""
     dut = _Harness(0, async_tx=True)
-    result = {}
+    result = {"steps": 0, "steps_in_packet": 0}
 
     async def tb(ctx):
         for _ in range(12000):
             await ctx.tick("usb")
-        for name in ("packets",):
-            result["tx"] = ctx.get(dut.core.gen.packets)
+        result["tx"] = ctx.get(dut.core.gen.packets)
         for name in ("good", "bad", "errors", "gaps"):
             result[name] = ctx.get(getattr(dut.core.chk, name))
         result["up"] = ctx.get(dut.core.slips_up)
         result["down"] = ctx.get(dut.core.slips_down)
+        result["overflow"] = ctx.get(dut.core.overflow)
+
+    async def count_steps(ctx):
+        # resampler drop/dup strobes (one sample each); the CDR only tracks while a packet is present
+        exp = dut.core.expander
+        while True:
+            step = ctx.get(exp.drops) | ctx.get(exp.dups)
+            result["steps"] += step
+            result["steps_in_packet"] += step & ctx.get(dut.core.rx.cdr.in_packet)
+            await ctx.tick("rx_cdr")
 
     sim = Simulator(dut)
     sim.add_clock(1 / 60e6, domain="usb")
     sim.add_clock(1 / 120e6, domain="rx_cdr")
     sim.add_clock(1 / (tx_mhz * 1e6), domain="tx_async")
     sim.add_testbench(tb)
+    sim.add_testbench(count_steps, background=True)
     sim.run()
     assert result["tx"] >= 8
     assert result["good"] >= result["tx"] - 1, result
     assert result["bad"] == 0 and result["errors"] == 0 and result["gaps"] == 0, result
-    # 12000 usb cycles = 200 us; the link is busy most of that time: ~96k bits -> expected slips
-    # ~ 4 * |ppm| * 1e-6 * bits ~= 1450 (fast) / 1780 (slow), only while in packet, so allow slack.
+    assert result["overflow"] == 0
+    # A slip is one phase-pointer wrap = one UI = 4 dropped/repeated samples, so the CDR must slip
+    # about once per 4 resampler steps that happen while it is tracking (in packet), in the
+    # direction of the offset; opposite-direction slips are rare acquisition steps.
     major, minor = (result["up"], result["down"]) if ppm < 0 else (result["down"], result["up"])
-    assert major > 250, result
+    expected = result["steps_in_packet"] / 4
+    assert expected > 150, result
+    assert abs(major - expected) <= 0.25 * expected + 5, (major, expected, result)
     assert minor <= major // 20 + 2, result
 
 
@@ -186,3 +205,20 @@ def test_async_resampler_preserves_bit_stream(tx_mhz):
     expected = (120.0 / tx_mhz - 1) * len(sent)      # fast TX -> fewer output samples
     # the backlog may sit anywhere in the +/-(HYST + one 32-sample lump) band at start and end
     assert abs(sum(diffs) - expected) <= 80, (sum(diffs), expected)
+
+
+def test_build_tag_and_modes():
+    import argparse
+    from usb2soft.applets.link_test import LinkTest
+    p = argparse.ArgumentParser()
+    LinkTest.add_arguments(p)
+    for argv, tag in (([], "-internal"), (["--mode", "hdmi", "--hdmi-rx", "1"], "-hdmi-rx1"),
+                      (["--mode", "async-fast"], "-async-fast"), (["--mode", "async-slow"], "-async-slow")):
+        args = p.parse_args(argv)
+        assert LinkTest.build_tag(args) == tag
+        applet = LinkTest(args)
+        applet._MustUse__silence = True      # not elaborated here
+        xdc = applet.vivado_constraints()
+        assert bool(xdc) == args.mode.startswith("async-")
+        if xdc:
+            assert "set_clock_groups -asynchronous" in xdc[0] and "raw_tx_async" in xdc[0]
