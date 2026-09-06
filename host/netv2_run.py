@@ -35,7 +35,15 @@ PROFILES = {
                           extra_pre=("~/n/bin/node ~/n/lib/node_modules/pm2/bin/pm2 stop netv2-status || true",)),
     "rpi5-netv2": Profile("rpi5-netv2", "tim@rpi5-netv2.welland.mithis.com", "tim", "/dev/ttyAMA0",
                           "a7-100", "netv2-jtag-gpiod.cfg", sudo=True,
-                          extra_pre=("sudo pinctrl set 14 a4; sudo pinctrl set 15 a4",)),
+                          extra_pre=("sudo pinctrl set 14 a4; sudo pinctrl set 15 a4",
+                                     # A stale /sys/class/gpio export (from an old sysfsgpio OpenOCD run)
+                                     # blocks libgpiod from claiming the JTAG lines; release them.
+                                     # sysfs numbers are chip base + line; the 40-pin header controller
+                                     # is the 54-line chip (pinctrl-rp1 on a Pi 5, bcm2835 on Pi 3/4).
+                                     "for c in /sys/class/gpio/gpiochip*; do "
+                                     "[ \"$(cat $c/ngpio)\" = 54 ] || continue; b=$(cat $c/base); "
+                                     "for n in 4 17 22 24 27; do g=$((b+n)); [ -e /sys/class/gpio/gpio$g ] && "
+                                     "echo $g | sudo tee /sys/class/gpio/unexport; done; done; true")),
 }
 
 
@@ -80,7 +88,10 @@ def main(argv=None):
     profile = PROFILES[args.host]
 
     who = ssh(profile, "w -h", capture=True).stdout
-    others = [l for l in who.splitlines() if l.strip() and " w -h" not in l]
+    # Ignore our own non-interactive ssh (shows as "sshd-session: <user> [priv]") and the local
+    # desktop session (tty7); anything else is another person or session.
+    others = [l for l in who.splitlines()
+              if l.strip() and "sshd-session" not in l and "lightdm" not in l]
     print(f"[{profile.name}] logged-in sessions:\n{who}")
     if others and not args.force:
         print("other sessions present; re-run with --force if you have checked they are idle", file=sys.stderr)

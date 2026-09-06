@@ -18,3 +18,6 @@ dist/
 # Scratch
 tmp/
 .worktrees/
+
+# Hardware evidence logs are tracked even though *.log is ignored above
+!docs/results/logs/*.log
