@@ -78,7 +78,7 @@ def test_frequency_offset_tracked_over_long_packet(S, W, ppm):
 
 # Gaussian jitter on every edge. With the S=4 dead-zone vote rule the pick self-centres 0.5 UI
 # after the mean edge, so ~0.08 UI rms (3 sigma = 0.24 UI, plus 0.125 UI sampling quantisation)
-# is the knee: measured 6/6 packets intact at 0.08 and 5/6 at 0.10 (tests/test_rx_margins.py
+# is the knee: measured 10/10 packets intact at 0.08 and 0.10, 5/10 at 0.12 (tests/test_rx_margins.py
 # records the full curve). The USB HS receiver eye assumes far less jitter than that.
 @pytest.mark.parametrize("rj_ui", [0.0, 0.03, 0.06, 0.08])
 def test_random_jitter_tolerance(rj_ui):
@@ -134,8 +134,9 @@ def test_activity_flag_follows_edges():
 
 @pytest.mark.parametrize("S,W", [(4, 16), (3, 12)])
 def test_all_edges_word_does_not_slip(S, W):
-    """A word with an edge at every sample (noise) gives equal up/down votes: no phase steps.
-    Regression: a signed reinterpretation of the popcount (16 read as -16) stepped every cycle."""
+    """A word with an edge at every sample (noise) gives equal up/down votes (each phase selects
+    exactly W/S positions per direction), so the CDR must not step. Documents the invariant that
+    keeps the popcounts small (at most W/S), which the accumulator arithmetic relies on."""
     dut = OversamplingCDR(samples_per_ui=S, samples_per_word=W)
     slips = 0
     phases = set()
@@ -154,6 +155,11 @@ def test_all_edges_word_does_not_slip(S, W):
     sim.add_testbench(tb)
     sim.run()
     assert slips == 0 and len(phases) <= 2
+
+
+def test_track_threshold_validated():
+    with pytest.raises(ValueError):
+        OversamplingCDR(samples_per_ui=4, samples_per_word=16, track_threshold=0)
 
 
 def test_noisy_idle_then_packet_locks():

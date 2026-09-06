@@ -50,7 +50,10 @@ class RxUTMIBridge(Elaboratable):
         with m.If(fifo.r_rdy):
             with m.If(r_start):
                 usb += self.rx_active.eq(1)
-            with m.If(r_dv):
+            # A byte can complete in the same decoder word as an ERROR (e.g. six ones then a
+            # missing stuff zero). Emitting it would raise rx_valid while rx_active falls; the
+            # packet is already bad, so drop it.
+            with m.If(r_dv & ~r_err):
                 usb += [self.rx_valid.eq(1), self.rx_data.eq(r_data)]
             with m.If(r_end | r_err):
                 usb += self.rx_active.eq(0)

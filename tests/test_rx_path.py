@@ -30,6 +30,7 @@ def run_path(samples, *, S=4, W=16, extra_cycles=200):
         ctx.set(dut.rx.samples, (1 << W) - 1)
         for _ in range(extra_cycles):
             await ctx.tick("cdr")
+        assert ctx.get(dut.rx.bridge.overflow) == 0, "event FIFO overflowed"
 
     async def utmi(ctx):
         nonlocal cur, errors
@@ -85,6 +86,18 @@ def test_three_x_variant():
     payloads = [bytes(range(32)), bytes(range(100, 130))]
     got, errors = run_path(stream(payloads, ppm=-300, S=3), S=3, W=12)
     assert got == payloads and errors == 0
+
+
+@pytest.mark.parametrize("shift", range(5))
+def test_bad_packet_keeps_utmi_ordering(shift):
+    """A byte ending in six ones followed by a flat line (missing stuff zero) completes a byte
+    and raises ERROR in the same decoder word; rx_valid must never appear with rx_active low."""
+    payload = bytes([0x11, 0xFC])
+    line = [1] * (40 + shift) + usbhs.packet_line_bits(payload)[:-8]        # drop the EOP
+    line += [line[-1]] * 40                                                  # flat: violation without the EOP zero
+    samples = usbhs.LineSampler(samples_per_ui=4).sample(line)
+    got, errors = run_path(samples)                                          # run_path asserts the ordering
+    assert errors == 1
 
 
 def test_jitter_and_noise_between_packets():

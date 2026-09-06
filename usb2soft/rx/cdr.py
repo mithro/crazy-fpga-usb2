@@ -19,6 +19,8 @@ class OversamplingCDR(Elaboratable):
             raise ValueError("samples_per_ui must be 3 or 4")
         if W % S:
             raise ValueError("samples_per_word must be a multiple of samples_per_ui")
+        if track_threshold < 1:
+            raise ValueError("track_threshold must be at least 1")
         self.S, self.W, self.B = S, W, W // S
         self.track_threshold = track_threshold
         self.idle_ui = idle_ui
@@ -78,17 +80,23 @@ class OversamplingCDR(Elaboratable):
         # up/down are unsigned popcounts (at most W/S each, since ``ideal`` cycles through every
         # residue); amaranth widens them correctly when mixed with the signed accumulator.
         m.d.comb += acc_next.eq(acc + up - down)
+        # When a packet ends the banked residual is cleared, otherwise the threshold dropping to
+        # 1 would turn it into a spurious step (and slip strobe) with no edge behind it.
+        prev_in_packet = Signal()
+        packet_ended = Signal()
+        sync += prev_in_packet.eq(self.in_packet)
+        m.d.comb += packet_ended.eq(prev_in_packet & ~self.in_packet)
         step_up = Signal()
         step_down = Signal()
         m.d.comb += [
-            step_up.eq(acc_next >= thr),
-            step_down.eq(acc_next <= -thr),
+            step_up.eq((acc_next >= thr) & ~packet_ended),
+            step_down.eq((acc_next <= -thr) & ~packet_ended),
         ]
-        with m.If(step_up | step_down):
+        # A step resets the accumulator, so it can never bank more than T-1 votes (no clamp needed).
+        with m.If(step_up | step_down | packet_ended):
             sync += acc.eq(0)
         with m.Else():
-            # saturate so a burst of noise cannot bank votes
-            sync += acc.eq(Mux(acc_next > T, T, Mux(acc_next < -T, -T, acc_next)))
+            sync += acc.eq(acc_next)
 
         # --- picks -------------------------------------------------------------------------
         # sel = phase + step + 1 in [0, S+1]: 0 means "phase went to -1", S+1 means "went to S".

@@ -400,7 +400,7 @@ crazy-fpga-usb2/
 
 Simulation (pytest, Amaranth simulator, run under `uv run pytest`):
 
-- `sim/wire.py` produces sample streams from byte packets: SYNC length,
+- `sim/usbhs.py` produces sample streams from byte packets: SYNC length,
   stuffing, NRZI, EOP, inter-packet idle with configurable noise (random
   toggles, stuck level), frequency offset in ppm, linear frequency ramps,
   Gaussian and deterministic jitter, phase steps between packets. It also
