@@ -19,10 +19,16 @@ def main(argv=None):
     b.add_argument("--toolchain", default="vivado", choices=["vivado", "xray"])
     b.add_argument("--build-root", default="build")
     b.add_argument("--no-build", action="store_true", help="generate sources only")
-    for applet in APPLETS.values():
-        applet.add_arguments(b)
 
-    args = parser.parse_args(argv)
+    # Common options first; the chosen applet's own options (which may share names with other
+    # applets', e.g. --mode) are parsed by a second, applet-specific parser.
+    args, rest = parser.parse_known_args(argv)
+    if args.command == "build":
+        ap = argparse.ArgumentParser(prog=f"usb2soft build {args.applet}")
+        APPLETS[args.applet].add_arguments(ap)
+        ap.parse_args(rest, namespace=args)
+    elif rest:
+        parser.error(f"unrecognized arguments: {' '.join(rest)}")
     if args.command == "list":
         for name, cls in sorted(APPLETS.items()):
             print(f"{name:24s} {cls.description}")
