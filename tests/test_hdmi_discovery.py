@@ -60,25 +60,46 @@ def test_listener_decodes_inverted_lane():
     assert r == {"id": 0xABCDEF, "pl": 0x13, "inv": 1}
 
 
-def test_seen_times_out_when_lane_goes_quiet():
-    dut = LaneListener(divisor=DIV, timeout_cycles=200)
-    seq = frame_bytes(0x010203, port=0, lane=0)
-
-    async def tb(ctx):
-        ctx.set(dut.rx, 1)
-        for _ in range(4 * DIV):
-            await ctx.tick()
+async def _send_frames(ctx, dut, frames):
+    ctx.set(dut.rx, 1)
+    for _ in range(4 * DIV):
+        await ctx.tick()
+    for seq in frames:
         for b in seq:
             for bit in [0] + [(b >> i) & 1 for i in range(8)] + [1]:
                 ctx.set(dut.rx, bit)
                 for _ in range(DIV):
                     await ctx.tick()
-        ctx.set(dut.rx, 1)
-        for _ in range(4):
-            await ctx.tick()
+    ctx.set(dut.rx, 1)
+    for _ in range(4):
+        await ctx.tick()
+
+
+def test_seen_times_out_when_lane_goes_quiet():
+    # timeout must exceed one frame period (6 bytes x 10 bits x DIV = 240 cycles), as on hardware
+    dut = LaneListener(divisor=DIV, timeout_cycles=600)
+    seq = frame_bytes(0x010203, port=0, lane=0)
+
+    async def tb(ctx):
+        await _send_frames(ctx, dut, [seq, seq])   # two agreeing frames are required
         assert ctx.get(dut.seen) == 1
-        for _ in range(260):
+        for _ in range(660):
             await ctx.tick()
+        assert ctx.get(dut.seen) == 0
+
+    sim = Simulator(dut)
+    sim.add_clock(1 / 60e6)
+    sim.add_testbench(tb)
+    sim.run()
+
+
+def test_single_or_disagreeing_frames_are_ignored():
+    dut = LaneListener(divisor=DIV, timeout_cycles=600)
+    noise = bytes([0xA5, 0x00, 0x80, 0x80, 0x00, 0x00])     # valid checksum, seen on hardware
+    other = frame_bytes(0x010203, port=0, lane=1)
+
+    async def tb(ctx):
+        await _send_frames(ctx, dut, [noise, other])
         assert ctx.get(dut.seen) == 0
 
     sim = Simulator(dut)

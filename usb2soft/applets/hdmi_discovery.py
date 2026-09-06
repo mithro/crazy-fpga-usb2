@@ -97,18 +97,34 @@ class LaneListener(Elaboratable):
             fm_t.data.eq(rx_t.data), fm_t.valid.eq(rx_t.valid),
             fm_i.data.eq(rx_i.data), fm_i.valid.eq(rx_i.valid),
         ]
+        # A single 6-byte window can match by chance on a noisy/floating lane (seen on hardware:
+        # "A5 00 80 80 00 00" has a valid checksum). Require two consecutive frames that agree on
+        # peer id, lane and polarity before reporting the lane as seen.
+        hit = fm_t.hit | fm_i.hit
+        hit_id = Mux(fm_t.hit, fm_t.peer_id, fm_i.peer_id)
+        hit_pl = Mux(fm_t.hit, fm_t.peer_pl, fm_i.peer_pl)
+        hit_inv = fm_i.hit & ~fm_t.hit
+        cand_id = Signal(24)
+        cand_pl = Signal(8)
+        cand_inv = Signal()
+        cand_timer = Signal(range(self.timeout_cycles + 1))   # candidate stays valid for one timeout
         timer = Signal(range(self.timeout_cycles + 1))
-        with m.If(fm_t.hit | fm_i.hit):
-            m.d.sync += [
-                timer.eq(self.timeout_cycles), self.seen.eq(1),
-                self.inverted.eq(fm_i.hit & ~fm_t.hit),
-                self.peer_id.eq(Mux(fm_t.hit, fm_t.peer_id, fm_i.peer_id)),
-                self.peer_pl.eq(Mux(fm_t.hit, fm_t.peer_pl, fm_i.peer_pl)),
-            ]
-        with m.Elif(timer != 0):
-            m.d.sync += timer.eq(timer - 1)
+        cand_valid = cand_timer != 0
+        with m.If(hit):
+            m.d.sync += [cand_id.eq(hit_id), cand_pl.eq(hit_pl), cand_inv.eq(hit_inv),
+                         cand_timer.eq(self.timeout_cycles)]
+            with m.If(cand_valid & (cand_id == hit_id) & (cand_pl == hit_pl) & (cand_inv == hit_inv)):
+                m.d.sync += [
+                    timer.eq(self.timeout_cycles), self.seen.eq(1),
+                    self.inverted.eq(hit_inv), self.peer_id.eq(hit_id), self.peer_pl.eq(hit_pl),
+                ]
         with m.Else():
-            m.d.sync += self.seen.eq(0)
+            with m.If(cand_timer != 0):
+                m.d.sync += cand_timer.eq(cand_timer - 1)
+            with m.If(timer != 0):
+                m.d.sync += timer.eq(timer - 1)
+            with m.Else():
+                m.d.sync += self.seen.eq(0)
         return m
 
 
