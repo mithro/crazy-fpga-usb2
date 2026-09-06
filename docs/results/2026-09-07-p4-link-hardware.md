@@ -53,8 +53,17 @@ channel (see below).
 
 ## HDMI mode
 
-Build `build/link-test-hdmi-rx0-netv2-a7-100/vivado` (see the table appended below once the
-build completes) instantiates the sampler on HDMI RX0 lane d0 and the serialiser on HDMI TX0
-lane d0. There is no cable between them on rpi5-netv2 (measured in P1), so a hardware run
+Build `build/link-test-hdmi-rx0-netv2-a7-100/vivado` instantiates the sampler on HDMI RX0
+lane d0 and the serialiser on HDMI TX0 lane d0:
+
+| Item | Value |
+|---|---|
+| WNS / WHS / WPWS | 0.445 ns / 0.036 ns / 0.491 ns (all met; WPWS is the 480 MHz BUFG pulse width) |
+| Clocks present | 50, 60 (`usb`, MMCM ref), 120 (`cdr`), 240 (`tx_io`), **480 (`rx_io`)**, 300 (`idelay_ref`) |
+| Primitives | 2× ISERDESE2, 2× IDELAYE2, 1× IDELAYCTRL, 1× OSERDESE2, IBUFDS_DIFF_OUT, OBUFTDS |
+| Whole design | 999 LUTs, 915 FFs; no critical warnings, DRC clean |
+
+There is no cable between TX0 and RX0 on rpi5-netv2 (measured in P1), so a hardware run
 reports `rx == 0`; the bitstream is ready for the moment a TX0→RX0 cable or the cross-connected
-NeTV2 units are available.
+NeTV2 units are available. The sample-order parameters (`q_reversed`, `slave_first`) are
+unverified until then.

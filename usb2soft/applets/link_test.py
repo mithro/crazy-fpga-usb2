@@ -16,7 +16,7 @@ from ..debug.report import Hex
 from ..io.sampler import Sampler, IdelayCtrl
 from ..io.serializer import Serializer
 from ..rx import RxPath
-from ..sim.expander import SampleExpander
+from ..sim.expander import SampleExpander, AsyncResampler
 from ..tx import TxPath
 
 CONSOLE_BAUD = 115200
@@ -158,8 +158,15 @@ class LinkTestCore(Elaboratable):
     """TxPath + RxPath + generator/checker + counters. ``internal=True`` wires TX to RX through a
     SampleExpander; otherwise ``samples`` (in) and ``line``/``oe`` (out) are exposed for pins."""
     def __init__(self, *, internal, phase_shift=0, gap=16, samples_per_ui=4, usb_domain="usb",
-                 cdr_domain="rx_cdr", tx_domain="tx_cdr", report_period=60_000_000, console_divisor=521):
+                 cdr_domain="rx_cdr", tx_domain="tx_cdr", async_tx=False, report_period=60_000_000,
+                 console_divisor=521):
+        """``async_tx=True`` (internal mode only) runs the TX path in the ``tx_async`` domain and
+        crosses into the CDR domain through an AsyncResampler, so the receiver sees a source with a
+        real frequency offset."""
         self.internal = internal
+        self.async_tx = async_tx
+        if async_tx:
+            tx_domain = "tx_async"
         self.usb_domain, self.cdr_domain, self.tx_domain = usb_domain, cdr_domain, tx_domain
         self.report_period = report_period
         self.tx = TxPath(tx_domain=tx_domain, usb_domain=usb_domain)
@@ -167,8 +174,14 @@ class LinkTestCore(Elaboratable):
                          cdr_domain=cdr_domain, usb_domain=usb_domain)
         self.gen = PacketGenerator(gap=gap, domain=usb_domain)
         self.chk = PacketChecker(domain=usb_domain)
-        self.expander = SampleExpander(samples_per_ui=samples_per_ui, phase_shift=phase_shift,
-                                       domain=cdr_domain) if internal else None
+        if not internal:
+            self.expander = None
+        elif async_tx:
+            self.expander = AsyncResampler(samples_per_ui=samples_per_ui, in_domain=tx_domain,
+                                           out_domain=cdr_domain)
+        else:
+            self.expander = SampleExpander(samples_per_ui=samples_per_ui, phase_shift=phase_shift,
+                                           domain=cdr_domain)
         self.samples = self.rx.samples
         self.line = self.tx.line
         self.oe = self.tx.oe
@@ -228,7 +241,8 @@ class LinkTest(Applet):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument("--mode", choices=["internal", "hdmi"], default="internal")
+        parser.add_argument("--mode", choices=["internal", "async-fast", "async-slow", "hdmi"], default="internal",
+                            help="async-*: internal loopback with the TX PLL offset by +3788/-4630 ppm")
         parser.add_argument("--phase-shift", type=int, default=1, help="internal mode: sample rotation 0..3")
         parser.add_argument("--hdmi-rx", type=int, choices=[0, 1], default=0)
 
@@ -236,9 +250,11 @@ class LinkTest(Applet):
         m = Module()
         args = self.args
         mode = getattr(args, "mode", "internal")
-        m.submodules.clocks = clocks = NeTV2PhyClocks()
+        async_tx = mode.split("-")[1] if mode.startswith("async-") else None
+        m.submodules.clocks = clocks = NeTV2PhyClocks(async_tx=async_tx)
         m.domains += clocks.domains
-        core = LinkTestCore(internal=(mode == "internal"), phase_shift=getattr(args, "phase_shift", 1))
+        core = LinkTestCore(internal=(mode != "hdmi"), async_tx=bool(async_tx),
+                            phase_shift=getattr(args, "phase_shift", 1))
         m.submodules.core = core
         if mode == "hdmi":
             m.submodules.idc = IdelayCtrl()

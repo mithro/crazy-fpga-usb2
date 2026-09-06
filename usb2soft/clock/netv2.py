@@ -56,14 +56,30 @@ class NeTV2PhyClocks(Elaboratable):
     MMCM_OUTPUTS = {"rx_io": 480e6, "tx_io": 240e6, "cdr": 120e6, "usb": 60e6}
     MMCM_VCO = 960e6
 
-    def __init__(self):
+    # Optional second PLL giving a transmit clock offset from the 120 MHz receive clock, for the
+    # asynchronous internal loopback test: 50 MHz * mult / (divclk * divide).
+    ASYNC_TX = {
+        "fast": dict(divclk=2, mult=53, divide=11),   # 1325 MHz / 11 = 120.4545 MHz, +3788 ppm
+        "slow": dict(divclk=2, mult=43, divide=9),    # 1075 MHz / 9  = 119.4444 MHz, -4630 ppm
+    }
+
+    def __init__(self, *, async_tx=None):
+        self.async_tx = async_tx
         self.locked = Signal()
         self.ps_en = Signal()
         self.ps_incdec = Signal()
         self.ps_done = Signal()
         names = ["sync", "usb", "rx_cdr", "tx_cdr", "rx_io", "tx_io", "idelay_ref"]
+        if async_tx:
+            names.append("tx_async")
         self.cd = {n: ClockDomain(n) for n in names}
         self.domains = list(self.cd.values())
+
+    @classmethod
+    def async_tx_ppm(cls, key):
+        cfg = cls.ASYNC_TX[key]
+        f = 50e6 * cfg["mult"] / (cfg["divclk"] * cfg["divide"])
+        return (f / 120e6 - 1) * 1e6
 
     def elaborate(self, platform):
         m = Module()
@@ -87,7 +103,18 @@ class NeTV2PhyClocks(Elaboratable):
             self.cd["idelay_ref"].clk.eq(pll.clocks["idelay_ref"]),
             self.locked.eq(pll.locked & mmcm.locked),
         ]
+        locked_all = self.locked
+        if self.async_tx:
+            from .params import ClockSolution, OutputSetting
+            cfg = self.ASYNC_TX[self.async_tx]
+            vco = 50e6 * cfg["mult"] / cfg["divclk"]
+            sol2 = ClockSolution(kind="pll", fin=50e6, divclk=cfg["divclk"], mult=cfg["mult"], vco=vco,
+                                 outputs={"tx_async": OutputSetting(frequency=vco / cfg["divide"],
+                                                                    divide=cfg["divide"])})
+            m.submodules.pll2 = pll2 = PLLE2(sol2, clkin=clk50_buf.i)
+            m.d.comb += self.cd["tx_async"].clk.eq(pll2.clocks["tx_async"])
+            locked_all = self.locked & pll2.locked
         for name in self.cd:
-            arst = ~pll.locked if name == "idelay_ref" else ~self.locked
+            arst = ~pll.locked if name == "idelay_ref" else ~locked_all
             m.submodules[f"rst_{name}"] = ResetSynchronizer(arst, domain=name)
         return m
