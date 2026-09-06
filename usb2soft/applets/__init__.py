@@ -9,7 +9,7 @@ __all__ = ["Applet", "APPLETS", "register", "load_builtin_applets"]
 APPLETS = {}
 
 # Built-in applet modules; each registers itself on import.
-_BUILTIN = ("hello", "hdmi_discovery")
+_BUILTIN = ("hello", "hdmi_discovery", "link_test")
 
 
 class Applet(Elaboratable):
@@ -20,8 +20,17 @@ class Applet(Elaboratable):
     def add_arguments(cls, parser):
         """Applet-specific CLI options (override if needed)."""
 
+    @classmethod
+    def build_tag(cls, args):
+        """Suffix for the build directory when applet options change the design (override)."""
+        return ""
+
     def __init__(self, args=None):
         self.args = args
+
+    def vivado_constraints(self):
+        """Extra XDC lines for Vivado builds (e.g. clock groups); override if needed."""
+        return ()
 
 
 def register(cls):

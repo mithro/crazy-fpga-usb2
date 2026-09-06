@@ -88,3 +88,15 @@ relationship is untouched.
 Resets: `~locked` of the MMCM through `ResetSynchronizer` into each domain;
 the PLL lock gates the MMCM reset. ISERDES/OSERDES `RST` is held for a few
 CLKDIV cycles after lock.
+
+## Reset ordering (learned on hardware, 2026-09-07)
+
+The generators form a lock chain (PLLE2 → MMCME2 → optional second PLLE2, each held in reset
+until the previous one locks), and every fabric domain is reset from the *last* LOCKED pin in the
+chain so that all domains leave reset in the same instant. Resetting each domain from its own
+generator looked tidier but lost data on hardware: `AsyncFIFOBuffered` keeps its inner storage
+across a read-domain reset while its read-side output register is cleared, so a write domain
+that starts earlier than the read domain (usb before `tx_async`) pushes bytes that the reader
+never sees (one corrupt and five missing packets at start-up in `link-test --mode async-fast`).
+Only `idelay_ref` is reset from the first PLL alone. A single LOCKED pin per reset synchroniser
+also keeps Vivado's LUTAR-1 methodology check quiet.
